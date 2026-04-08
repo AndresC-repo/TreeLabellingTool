@@ -23,6 +23,11 @@ def get_next_label(patch_id: str) -> int:
 def apply_label(patch_id: str, indices: list[int], label_value: int) -> dict:
     """Apply label_value to the given point indices. Returns label statistics."""
     state = _state[patch_id]
+    label_len = len(state["labels"])
+    if indices and max(indices) >= label_len:
+        raise IndexError(
+            f"Index {max(indices)} out of range for patch with {label_len} points"
+        )
     state["labels"][indices] = label_value
     if label_value != 0:
         state["used"].add(label_value)

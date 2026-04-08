@@ -32,10 +32,22 @@ def extract_patch(
     las_path = get_las_path(session_id)
     patch_id = str(uuid.uuid4())
     patch_dir = get_session_dir(session_id) / "patches"
+    patch_dir.mkdir(parents=True, exist_ok=True)
     patch_path = patch_dir / f"{patch_id}.las"
 
     x_all, y_all, z_all = [], [], []
     class_all, int_all, ret_all = [], [], []
+
+    # Pre-compute polygon bbox for polygon selections (avoid recomputing per chunk)
+    poly_bbox = None
+    if selection_type == "polygon" and polygon_2d:
+        poly_arr = np.array(polygon_2d)
+        poly_bbox = {
+            "x_min": float(poly_arr[:, 0].min()),
+            "x_max": float(poly_arr[:, 0].max()),
+            "y_min": float(poly_arr[:, 1].min()),
+            "y_max": float(poly_arr[:, 1].max()),
+        }
 
     with laspy.open(las_path) as f:
         src_header = f.header
@@ -49,12 +61,11 @@ def extract_patch(
                     (cy >= bounds_2d["y_min"]) & (cy <= bounds_2d["y_max"])
                 )
             elif selection_type == "polygon" and polygon_2d:
-                poly_arr = np.array(polygon_2d)
-                x_min, x_max = poly_arr[:, 0].min(), poly_arr[:, 0].max()
-                y_min, y_max = poly_arr[:, 1].min(), poly_arr[:, 1].max()
+                if poly_bbox is None:
+                    continue
                 bbox_mask = (
-                    (cx >= x_min) & (cx <= x_max) &
-                    (cy >= y_min) & (cy <= y_max)
+                    (cx >= poly_bbox["x_min"]) & (cx <= poly_bbox["x_max"]) &
+                    (cy >= poly_bbox["y_min"]) & (cy <= poly_bbox["y_max"])
                 )
                 if not bbox_mask.any():
                     continue
@@ -112,4 +123,5 @@ def extract_patch(
             "y": [float(y.min()), float(y.max())],
             "z": [float(z.min()), float(z.max())],
         },
+        "classification": classification,
     }

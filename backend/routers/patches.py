@@ -35,10 +35,8 @@ def extract(session_id: str, req: ExtractionRequest):
     if result["point_count"] == 0:
         raise HTTPException(400, "No points found in selection")
 
-    # Initialize label state from the saved patch's original classification
-    patch_path = get_patch_path(session_id, result["patch_id"])
-    las = laspy.read(str(patch_path))
-    lm.init_patch(result["patch_id"], np.array(las.classification))
+    # Initialize label state from the extracted classification (avoids redundant file read)
+    lm.init_patch(result["patch_id"], result["classification"])
 
     return ExtractionResponse(
         patch_id=result["patch_id"],
