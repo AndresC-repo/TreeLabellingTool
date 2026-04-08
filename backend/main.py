@@ -1,7 +1,14 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import config
 
-app = FastAPI(title="Point Cloud Labeling Tool")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    yield
+
+app = FastAPI(title="Point Cloud Labeling Tool", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
