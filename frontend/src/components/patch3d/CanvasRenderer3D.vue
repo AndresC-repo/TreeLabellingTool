@@ -1,6 +1,15 @@
 <template>
   <div ref="container" class="canvas3d">
     <div v-if="loading" class="loading">Loading patch...</div>
+    <LassoOverlay
+      :drawing="lasso.drawing.value"
+      :lassoPoints="lasso.lassoPoints.value"
+      :processing="lasso.processing.value"
+      @start="lasso.startLasso"
+      @addPoint="lasso.addPoint"
+      @finish="onLassoFinish"
+      @cancel="lasso.cancelLasso"
+    />
   </div>
 </template>
 
@@ -11,6 +20,8 @@ import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud3D } from '../../composables/usePointCloud3D.js'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useRoute } from 'vue-router'
+import { useLasso3D } from '../../composables/useLasso3D.js'
+import LassoOverlay from './LassoOverlay.vue'
 
 const container = ref(null)
 const route = useRoute()
@@ -19,7 +30,18 @@ const store = usePatch3DStore()
 const { scene, camera, renderer } = useThreeScene(container, 'perspective')
 const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, getPositions, dispose } = usePointCloud3D(scene, route.params.id, route.params.patchId)
 
+const lasso = useLasso3D(camera, renderer)
+
 let controls = null
+
+async function onLassoFinish() {
+  const positions = getPositions()
+  if (!positions) return
+  const indices = await lasso.finishLasso(positions)
+  if (indices.length === 0) return
+  store.selectedIndices = indices
+  highlightIndices(indices)
+}
 
 onMounted(async () => {
   const result = await load()
