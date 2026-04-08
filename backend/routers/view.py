@@ -1,48 +1,65 @@
 import numpy as np
-import laspy
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from services.las_reader import get_las_path
 from services.decimator import read_decimated
-from services import projection as proj
+from services.projection import (
+    classification_to_rgb,
+    intensity_to_rgb,
+    returns_to_rgb,
+    build_2d_buffer,
+    CLASSIFICATION_COLORS,
+)
 from config import DEFAULT_MAX_POINTS
 
 router = APIRouter(prefix="/api/v1/view", tags=["view"])
+
+VALID_SCALAR_FIELDS = {"classification", "intensity", "number_of_returns"}
+
+# ASPRS human-readable labels for classification codes
+_CLASS_LABELS = {
+    0: "Never Classified",
+    1: "Unclassified",
+    2: "Ground",
+    3: "Low Vegetation",
+    4: "Medium Vegetation",
+    5: "High Vegetation",
+    6: "Building",
+    7: "Low Point (Noise)",
+    9: "Water",
+    17: "Bridge Deck",
+    18: "High Noise",
+}
 
 
 @router.get("/{session_id}/points")
 def get_2d_points(
     session_id: str,
     scalar_field: str = "classification",
-    max_points: int = DEFAULT_MAX_POINTS,
+    max_points: int = Query(DEFAULT_MAX_POINTS, ge=1, le=10_000_000),
 ):
     las_path = get_las_path(session_id)
     if not las_path.exists():
         raise HTTPException(404, "Session not found")
 
-    valid_fields = {"classification", "intensity", "number_of_returns"}
-    if scalar_field not in valid_fields:
-        raise HTTPException(400, f"scalar_field must be one of {sorted(valid_fields)}")
+    if scalar_field not in VALID_SCALAR_FIELDS:
+        raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
 
-    fields = ["x", "y", scalar_field]
-    data = read_decimated(las_path, max_points, fields)
+    data, total = read_decimated(las_path, max_points, ["x", "y", scalar_field])
 
-    x = data["x"].astype(np.float32) if hasattr(data["x"], "astype") else data["x"]
-    y = data["y"].astype(np.float32) if hasattr(data["y"], "astype") else data["y"]
+    x = data["x"].astype(np.float32)
+    y = data["y"].astype(np.float32)
     scalar = data[scalar_field]
 
     if scalar_field == "classification":
-        rgb = proj.classification_to_rgb(scalar)
+        rgb = classification_to_rgb(scalar)
     elif scalar_field == "intensity":
-        rgb = proj.intensity_to_rgb(scalar)
-    else:  # number_of_returns
-        rgb = proj.returns_to_rgb(scalar)
+        rgb = intensity_to_rgb(scalar)
+    else:
+        rgb = returns_to_rgb(scalar)
 
-    buf = proj.build_2d_buffer(x.astype(np.float32), y.astype(np.float32), rgb)
+    buf = build_2d_buffer(x, y, rgb)
     actual_count = len(x)
-
-    with laspy.open(las_path) as f:
-        total = f.header.point_count
     ratio = actual_count / total if total > 0 else 1.0
 
     return Response(
@@ -57,31 +74,27 @@ def get_2d_points(
 
 
 @router.get("/{session_id}/colormap")
-def get_colormap(session_id: str, scalar_field: str = "classification"):
+def get_colormap(
+    session_id: str,
+    scalar_field: str = "classification",
+):
     las_path = get_las_path(session_id)
     if not las_path.exists():
         raise HTTPException(404, "Session not found")
 
+    if scalar_field not in VALID_SCALAR_FIELDS:
+        raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
+
     if scalar_field == "classification":
         entries = [
             {
-                "value": k,
-                "label": label,
-                "color": f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}",
+                "value": code,
+                "label": _CLASS_LABELS.get(code, f"Class {code}"),
+                "color": "#{:02x}{:02x}{:02x}".format(
+                    round(r * 255), round(g * 255), round(b * 255)
+                ),
             }
-            for k, (r, g, b), label in [
-                (0,  (0.5, 0.5, 0.5),    "Never Classified"),
-                (1,  (0.7, 0.7, 0.7),    "Unclassified"),
-                (2,  (0.55, 0.27, 0.07), "Ground"),
-                (3,  (0.13, 0.55, 0.13), "Low Vegetation"),
-                (4,  (0.0, 0.8, 0.0),    "Medium Vegetation"),
-                (5,  (0.0, 0.5, 0.0),    "High Vegetation"),
-                (6,  (1.0, 0.0, 0.0),    "Building"),
-                (7,  (1.0, 0.5, 0.0),    "Low Point (Noise)"),
-                (9,  (0.0, 0.5, 1.0),    "Water"),
-                (17, (0.8, 0.8, 1.0),    "Bridge Deck"),
-                (18, (1.0, 0.0, 1.0),    "High Noise"),
-            ]
+            for code, (r, g, b) in CLASSIFICATION_COLORS.items()
         ]
         return {"field": scalar_field, "type": "categorical", "entries": entries}
 
