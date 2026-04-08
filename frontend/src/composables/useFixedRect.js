@@ -8,6 +8,7 @@ import { ref, reactive } from 'vue'
  */
 export function useFixedRect(camera, rendererDomEl) {
   const hasRect = ref(false)
+  const isDrawing = ref(false)
   const svgRect = reactive({ x1: 0, y1: 0, x2: 0, y2: 0 })
 
   let drawing = false
@@ -41,6 +42,7 @@ export function useFixedRect(camera, rendererDomEl) {
     if (e.button !== 0) return
     if (!hasRect.value) {
       drawing = true
+      isDrawing.value = true
       svgRect.x1 = e.offsetX
       svgRect.y1 = e.offsetY
       svgRect.x2 = e.offsetX
@@ -72,6 +74,7 @@ export function useFixedRect(camera, rendererDomEl) {
     let bounds = null
     if (drawing) {
       drawing = false
+      isDrawing.value = false
       svgRect.x2 = e.offsetX
       svgRect.y2 = e.offsetY
       if (Math.abs(svgRect.x2 - svgRect.x1) > 3 && Math.abs(svgRect.y2 - svgRect.y1) > 3) {
@@ -87,9 +90,10 @@ export function useFixedRect(camera, rendererDomEl) {
 
   function reset() {
     hasRect.value = false
+    isDrawing.value = false
     dragging = false
     drawing = false
   }
 
-  return { hasRect, svgRect, onMouseDown, onMouseMove, onMouseUp, reset, getWorldBounds }
+  return { hasRect, isDrawing, svgRect, onMouseDown, onMouseMove, onMouseUp, reset, getWorldBounds }
 }

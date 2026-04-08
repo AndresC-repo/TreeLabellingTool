@@ -19,11 +19,11 @@
     >
       <!-- Rectangle selection indicator -->
       <rect
-        v-if="store.activeTool === 'rectangle' && rectTool?.selecting?.value"
-        :x="Math.min(rectTool.svgRect.x1, rectTool.svgRect.x2)"
-        :y="Math.min(rectTool.svgRect.y1, rectTool.svgRect.y2)"
-        :width="Math.abs(rectTool.svgRect.x2 - rectTool.svgRect.x1)"
-        :height="Math.abs(rectTool.svgRect.y2 - rectTool.svgRect.y1)"
+        v-if="store.activeTool === 'rectangle' && rectTool.value?.selecting?.value"
+        :x="Math.min(rectTool.value.svgRect.x1, rectTool.value.svgRect.x2)"
+        :y="Math.min(rectTool.value.svgRect.y1, rectTool.value.svgRect.y2)"
+        :width="Math.abs(rectTool.value.svgRect.x2 - rectTool.value.svgRect.x1)"
+        :height="Math.abs(rectTool.value.svgRect.y2 - rectTool.value.svgRect.y1)"
         fill="rgba(122,179,255,0.1)"
         stroke="#7ab3ff"
         stroke-width="1.5"
@@ -31,19 +31,19 @@
       />
       <!-- Freehand polygon indicator -->
       <polyline
-        v-if="store.activeTool === 'freehand' && freehandTool?.svgPoints?.value?.length > 0"
-        :points="freehandTool.svgPoints.value.map(p => `${p.x},${p.y}`).join(' ')"
+        v-if="store.activeTool === 'freehand' && freehandTool.value?.svgPoints?.value?.length > 0"
+        :points="freehandTool.value.svgPoints.value.map(p => `${p.x},${p.y}`).join(' ')"
         fill="none"
         stroke="#ffd700"
         stroke-width="1.5"
       />
       <!-- Fixed rectangle indicator -->
       <rect
-        v-if="store.activeTool === 'fixed' && fixedTool?.hasRect?.value"
-        :x="Math.min(fixedTool.svgRect.x1, fixedTool.svgRect.x2)"
-        :y="Math.min(fixedTool.svgRect.y1, fixedTool.svgRect.y2)"
-        :width="Math.abs(fixedTool.svgRect.x2 - fixedTool.svgRect.x1)"
-        :height="Math.abs(fixedTool.svgRect.y2 - fixedTool.svgRect.y1)"
+        v-if="store.activeTool === 'fixed' && fixedTool.value?.hasRect?.value"
+        :x="Math.min(fixedTool.value.svgRect.x1, fixedTool.value.svgRect.x2)"
+        :y="Math.min(fixedTool.value.svgRect.y1, fixedTool.value.svgRect.y2)"
+        :width="Math.abs(fixedTool.value.svgRect.x2 - fixedTool.value.svgRect.x1)"
+        :height="Math.abs(fixedTool.value.svgRect.y2 - fixedTool.value.svgRect.y1)"
         fill="rgba(255,165,0,0.1)"
         stroke="#ffa500"
         stroke-width="1.5"
@@ -51,11 +51,11 @@
       />
       <!-- Fixed rect in-progress drawing (before hasRect) -->
       <rect
-        v-if="store.activeTool === 'fixed' && !fixedTool?.hasRect?.value && fixedTool?.svgRect"
-        :x="Math.min(fixedTool?.svgRect?.x1 ?? 0, fixedTool?.svgRect?.x2 ?? 0)"
-        :y="Math.min(fixedTool?.svgRect?.y1 ?? 0, fixedTool?.svgRect?.y2 ?? 0)"
-        :width="Math.abs((fixedTool?.svgRect?.x2 ?? 0) - (fixedTool?.svgRect?.x1 ?? 0))"
-        :height="Math.abs((fixedTool?.svgRect?.y2 ?? 0) - (fixedTool?.svgRect?.y1 ?? 0))"
+        v-if="store.activeTool === 'fixed' && fixedTool.value?.isDrawing?.value"
+        :x="Math.min(fixedTool.value?.svgRect?.x1 ?? 0, fixedTool.value?.svgRect?.x2 ?? 0)"
+        :y="Math.min(fixedTool.value?.svgRect?.y1 ?? 0, fixedTool.value?.svgRect?.y2 ?? 0)"
+        :width="Math.abs((fixedTool.value?.svgRect?.x2 ?? 0) - (fixedTool.value?.svgRect?.x1 ?? 0))"
+        :height="Math.abs((fixedTool.value?.svgRect?.y2 ?? 0) - (fixedTool.value?.svgRect?.y1 ?? 0))"
         fill="rgba(255,165,0,0.05)"
         stroke="#ffa50080"
         stroke-width="1"
@@ -69,7 +69,7 @@
 
 <script setup>
 import * as THREE from 'three'
-import { ref, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, shallowRef, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud2D } from '../../composables/usePointCloud2D.js'
@@ -124,9 +124,9 @@ watch(() => store.scalarField, async field => {
 
 // ── Selection composables (need renderer.domElement once it's ready) ────────
 // We lazily initialize them in onMounted because renderer.domElement requires init
-let rectTool = null
-let freehandTool = null
-let fixedTool = null
+const rectTool = shallowRef(null)
+const freehandTool = shallowRef(null)
+const fixedTool = shallowRef(null)
 
 // After Three.js init, wire up selection composables
 onMounted(() => {
@@ -134,41 +134,43 @@ onMounted(() => {
   // We defer by one tick to be safe
   nextTick(() => {
     const domRef = ref(renderer.value?.domElement)
-    rectTool     = useSelectionRect(camera, domRef)
-    freehandTool = useSelectionFreehand(camera, domRef)
-    fixedTool    = useFixedRect(camera, domRef)
+    rectTool.value     = useSelectionRect(camera, domRef)
+    freehandTool.value = useSelectionFreehand(camera, domRef)
+    fixedTool.value    = useFixedRect(camera, domRef)
   })
 })
 
 // SVG event routing
 async function onSvgMouseDown(e) {
-  if (store.activeTool === 'rectangle') rectTool?.onMouseDown(e)
-  else if (store.activeTool === 'fixed') fixedTool?.onMouseDown(e)
+  if (e.button === 1 || (e.button === 0 && e.altKey)) return
+  if (store.activeTool === 'rectangle') rectTool.value?.onMouseDown(e)
+  else if (store.activeTool === 'fixed') fixedTool.value?.onMouseDown(e)
 }
 
 function onSvgMouseMove(e) {
-  if (store.activeTool === 'rectangle') rectTool?.onMouseMove(e)
-  else if (store.activeTool === 'fixed') fixedTool?.onMouseMove(e)
+  if (store.activeTool === 'rectangle') rectTool.value?.onMouseMove(e)
+  else if (store.activeTool === 'fixed') fixedTool.value?.onMouseMove(e)
 }
 
 async function onSvgMouseUp(e) {
+  if (e.button === 1 || (e.button === 0 && e.altKey)) return
   if (store.activeTool === 'rectangle') {
-    const bounds = rectTool?.onMouseUp(e)
+    const bounds = rectTool.value?.onMouseUp(e)
     if (bounds) await doExtract('rectangle', bounds, null)
   } else if (store.activeTool === 'fixed') {
-    const bounds = fixedTool?.onMouseUp(e)
+    const bounds = fixedTool.value?.onMouseUp(e)
     if (bounds) await doExtract('rectangle', bounds, null)
   }
 }
 
 async function onSvgClick(e) {
   if (store.activeTool !== 'freehand') return
-  freehandTool?.onClick(e)
+  freehandTool.value?.onClick(e)
 }
 
 async function onSvgContextMenu(e) {
   if (store.activeTool !== 'freehand') return
-  const polygon = freehandTool?.onContextMenu(e)
+  const polygon = freehandTool.value?.onContextMenu(e)
   if (polygon) await doExtract('polygon', null, polygon)
 }
 
@@ -250,6 +252,7 @@ function onContainerMouseMove(e) {
   camera.value.position.x -= dx / camera.value.zoom
   camera.value.position.y += dy / camera.value.zoom
   lastX = e.clientX; lastY = e.clientY
+  drawHatchOverlay()
 }
 function onContainerMouseUp()  { isPanning = false }
 function endPan()              { isPanning = false }
@@ -260,6 +263,7 @@ function onWheel(e) {
   const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1
   camera.value.zoom = Math.max(0.001, camera.value.zoom * factor)
   camera.value.updateProjectionMatrix()
+  drawHatchOverlay()
 }
 </script>
 
