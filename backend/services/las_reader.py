@@ -1,8 +1,9 @@
 import uuid
 from pathlib import Path
 import laspy
-import numpy as np
 from config import SESSIONS_DIR, DECIMATION_CHUNK_SIZE
+
+CANDIDATE_FIELDS = ["classification", "intensity", "number_of_returns"]
 
 
 def get_session_dir(session_id: str) -> Path:
@@ -25,12 +26,14 @@ def get_las_path(session_id: str) -> Path:
 def read_metadata(session_id: str) -> dict:
     las_path = get_las_path(session_id)
     with laspy.open(las_path) as f:
-        header = f.header
-        count = header.point_count
+        count = f.header.point_count
         x_min, x_max = float("inf"), float("-inf")
         y_min, y_max = float("inf"), float("-inf")
         z_min, z_max = float("inf"), float("-inf")
+        dim_names = None
         for chunk in f.chunk_iterator(DECIMATION_CHUNK_SIZE):
+            if dim_names is None:
+                dim_names = set(chunk.point_format.dimension_names)
             x_min = min(x_min, float(chunk.x.min()))
             x_max = max(x_max, float(chunk.x.max()))
             y_min = min(y_min, float(chunk.y.min()))
@@ -38,7 +41,11 @@ def read_metadata(session_id: str) -> dict:
             z_min = min(z_min, float(chunk.z.min()))
             z_max = max(z_max, float(chunk.z.max()))
 
-    available = ["classification", "intensity", "number_of_returns"]
+    available = [f for f in CANDIDATE_FIELDS if dim_names and f in dim_names]
+    # Fallback: if no fields found, include all candidates (some LAS files expose different dim names)
+    if not available:
+        available = CANDIDATE_FIELDS[:]
+
     return {
         "point_count": count,
         "bounds": {
