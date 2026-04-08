@@ -13,8 +13,10 @@
       <p>Drop a <code>.las</code> file here or <strong>click to browse</strong></p>
     </template>
     <div v-else class="progress-wrap">
-      <div class="progress-bar" :style="{ width: progress + '%' }"></div>
-      <span>Uploading… {{ progress }}%</span>
+      <div class="progress-bar-track">
+        <div class="progress-bar" :style="{ width: progress + '%' }"></div>
+      </div>
+      <p class="progress-label">Uploading… {{ progress }}%</p>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
   </div>
@@ -35,12 +37,14 @@ const session = useSessionStore()
 const router = useRouter()
 
 async function onDrop(e) {
+  if (uploading.value) return
   dragging.value = false
   const file = e.dataTransfer.files[0]
   if (file) await upload(file)
 }
 
 async function onFileChange(e) {
+  if (uploading.value) return
   const file = e.target.files[0]
   if (file) await upload(file)
 }
@@ -83,22 +87,15 @@ async function upload(file) {
 p { color: #aac; line-height: 1.6; }
 code { color: #7af; font-family: monospace; }
 strong { color: #eee; }
-.progress-wrap {
-  height: 10px;
+.progress-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.progress-bar-track {
+  width: 100%;
+  height: 8px;
   background: #2a3a5a;
-  border-radius: 5px;
+  border-radius: 4px;
   overflow: hidden;
-  margin-bottom: 12px;
-  position: relative;
 }
-.progress-bar { height: 100%; background: #4af; transition: width 0.15s; border-radius: 5px; }
-.progress-wrap span {
-  position: absolute;
-  top: 14px;
-  left: 0; right: 0;
-  text-align: center;
-  font-size: 13px;
-  color: #aac;
-}
+.progress-bar { height: 100%; background: #4af; transition: width 0.15s; border-radius: 4px; }
+.progress-label { font-size: 13px; color: #aac; }
 .error { color: #f77; margin-top: 16px; font-size: 14px; }
 </style>
