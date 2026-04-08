@@ -1,0 +1,22 @@
+version: "3.9"
+services:
+  backend:
+    build: ./backend
+    volumes:
+      - storage_data:/app/storage
+    expose:
+      - "8000"
+    restart: unless-stopped
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  storage_data:
