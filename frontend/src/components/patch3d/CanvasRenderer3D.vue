@@ -25,9 +25,17 @@ onMounted(async () => {
   const result = await load()
   store.pointCount = pointCount.value
   if (result?.center && camera.value) {
-    const { center } = result
-    // Position camera to look at patch from above/side
-    camera.value.position.set(center.x, center.y - 50, center.z + 50)
+    const { center, positions } = result
+    // Compute bounding box extents from positions to set proportional camera offset
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity
+    for (let i = 0; i < positions.length; i += 3) {
+      if (positions[i]   < minX) minX = positions[i];   if (positions[i]   > maxX) maxX = positions[i]
+      if (positions[i+1] < minY) minY = positions[i+1]; if (positions[i+1] > maxY) maxY = positions[i+1]
+      if (positions[i+2] < minZ) minZ = positions[i+2]; if (positions[i+2] > maxZ) maxZ = positions[i+2]
+    }
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1)
+    const dist = span * 1.5
+    camera.value.position.set(center.x, center.y - dist, center.z + dist)
     camera.value.lookAt(center.x, center.y, center.z)
     controls = new OrbitControls(camera.value, renderer.value.domElement)
     controls.target.set(center.x, center.y, center.z)

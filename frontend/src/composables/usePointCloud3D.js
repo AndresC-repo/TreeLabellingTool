@@ -23,7 +23,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-      geo.setAttribute('color', new THREE.BufferAttribute(colors.slice(), 3))
+      geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
       const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false })
       pointsMesh = new THREE.Points(geo, mat)
       scene.value.add(pointsMesh)
