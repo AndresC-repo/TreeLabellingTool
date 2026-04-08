@@ -7,6 +7,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const nextLabel = ref(101)
   const selectedIndices = ref([])
   const savedUrl = ref(null)
+  const lassoProcessing = ref(false)
 
   function reset() {
     patchId.value = null
@@ -14,7 +15,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     nextLabel.value = 101
     selectedIndices.value = []
     savedUrl.value = null
+    lassoProcessing.value = false
   }
 
-  return { patchId, pointCount, nextLabel, selectedIndices, savedUrl, reset }
+  return { patchId, pointCount, nextLabel, selectedIndices, savedUrl, lassoProcessing, reset }
 })

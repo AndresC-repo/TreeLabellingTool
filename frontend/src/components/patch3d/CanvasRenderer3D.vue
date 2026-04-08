@@ -37,10 +37,15 @@ let controls = null
 async function onLassoFinish() {
   const positions = getPositions()
   if (!positions) return
-  const indices = await lasso.finishLasso(positions)
-  if (indices.length === 0) return
-  store.selectedIndices = indices
-  highlightIndices(indices)
+  store.lassoProcessing = true
+  try {
+    const indices = await lasso.finishLasso(positions)
+    if (indices.length === 0) return
+    store.selectedIndices = indices
+    highlightIndices(indices)
+  } finally {
+    store.lassoProcessing = false
+  }
 }
 
 onMounted(async () => {

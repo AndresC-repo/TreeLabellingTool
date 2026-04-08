@@ -9,7 +9,7 @@
     <p class="hint" v-if="store.selectedIndices.length > 0">
       {{ store.selectedIndices.length.toLocaleString() }} points selected
     </p>
-    <p class="hint faint" v-else-if="!processing">Draw a lasso to select points</p>
+    <p class="hint faint" v-else-if="!store.lassoProcessing">Draw a lasso to select points</p>
     <button
       class="apply-btn"
       :disabled="store.selectedIndices.length === 0 || applying"
@@ -17,7 +17,7 @@
     >
       {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }}
     </button>
-    <p v-if="processing" class="hint">Processing lasso selection...</p>
+    <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
   </div>
 </template>
 
@@ -31,7 +31,6 @@ const store = usePatch3DStore()
 const route = useRoute()
 const labelValue = ref(store.nextLabel)
 const applying = ref(false)
-const processing = ref(false)
 
 // Keep in sync with store (lasso updates store.nextLabel after each apply)
 watch(() => store.nextLabel, v => { labelValue.value = v })
@@ -58,8 +57,6 @@ async function applyLabel() {
   }
 }
 
-// Expose processing state so CanvasRenderer3D can update it
-defineExpose({ processing })
 </script>
 
 <style scoped>
