@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import laspy
 from pathlib import Path
@@ -107,11 +108,10 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
     if labels is None:
         raise HTTPException(404, "Patch label state not found")
     # Sanitize filename: only allow alphanumerics, dashes, underscores, dots
-    import re
     safe_name = re.sub(r"[^\w\-.]", "_", req.output_filename)
     if not safe_name.lower().endswith(".las"):
         safe_name += ".las"
-    output_dir = get_session_dir(session_id) / "outputs"
+    output_dir = get_session_dir(session_id) / "outputs" / patch_id
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / safe_name
     count = save_labeled_patch(patch_path, output_path, labels)
@@ -124,7 +124,7 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
 
 @router.get("/{session_id}/{patch_id}/download")
 def download_patch(session_id: str, patch_id: str):
-    output_dir = get_session_dir(session_id) / "outputs"
+    output_dir = get_session_dir(session_id) / "outputs" / patch_id
     if not output_dir.exists():
         raise HTTPException(404, "No saved output found")
     files = sorted(output_dir.glob("*.las"), key=lambda f: f.stat().st_mtime, reverse=True)
