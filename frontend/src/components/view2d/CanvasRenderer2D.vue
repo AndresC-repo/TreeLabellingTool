@@ -15,7 +15,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud2D } from '../../composables/usePointCloud2D.js'
@@ -31,7 +31,7 @@ const pointCount = ref(0)
 const decimationRatio = ref(1)
 
 const { scene, camera, renderer } = useThreeScene(containerRef, 'orthographic')
-const { load, loading: pc2dLoading, pointCount: pc2dCount, decimationRatio: pc2dRatio } = usePointCloud2D(scene, sessionId)
+const { load, loading: pc2dLoading, pointCount: pc2dCount, decimationRatio: pc2dRatio, dispose } = usePointCloud2D(scene, sessionId)
 const store = useView2DStore()
 
 watch(pc2dLoading, v => { loading.value = v })
@@ -54,12 +54,15 @@ onMounted(async () => {
 })
 
 watch(() => store.scalarField, async field => {
+  isPanning = false
   const center = await load(field)
   if (center && camera.value) {
     camera.value.position.set(center.x, center.y, 100)
     camera.value.lookAt(center.x, center.y, 0)
   }
 })
+
+onBeforeUnmount(() => dispose())
 
 // Pan (middle mouse / Alt+drag)
 let isPanning = false, lastX = 0, lastY = 0
@@ -116,7 +119,13 @@ function onWheel(e) {
   pointer-events: none;
 }
 .dim { opacity: 0.7; margin-left: 4px; }
-.svg-overlay, .hatch-overlay {
+.svg-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: all;
+}
+.hatch-overlay {
   position: absolute;
   top: 0; left: 0;
   width: 100%; height: 100%;
