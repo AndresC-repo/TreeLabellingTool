@@ -2,9 +2,11 @@
   <canvas
     ref="canvas"
     class="lasso-canvas"
+    :style="{ pointerEvents: rotateMode ? 'none' : 'all' }"
     @mousedown="onDown"
     @mousemove="onMove"
     @dblclick="onFinish"
+    @contextmenu.prevent="onFinish"
     @keydown.esc.prevent="onCancel"
     tabindex="0"
   ></canvas>
@@ -17,6 +19,7 @@ const props = defineProps({
   drawing: Boolean,
   lassoPoints: Array,
   processing: Boolean,
+  rotateMode: Boolean,
 })
 const emit = defineEmits(['start', 'addPoint', 'finish', 'cancel'])
 
@@ -71,5 +74,6 @@ function onCancel(e) { emit('cancel', e) }
   top: 0; left: 0; width: 100%; height: 100%;
   cursor: crosshair;
   outline: none;
+  pointer-events: all;
 }
 </style>

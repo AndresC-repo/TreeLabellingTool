@@ -8,7 +8,7 @@ from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelR
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
-from services.projection import classification_to_rgb
+from services.projection import elevation_to_rgb
 from services.las_writer import save_labeled_patch
 
 router = APIRouter(prefix="/api/v1/patches", tags=["patches"])
@@ -58,7 +58,7 @@ def get_patch_points(session_id: str, patch_id: str):
     y = np.array(las.y, dtype=np.float32)
     z = np.array(las.z, dtype=np.float32)
     classification = np.array(las.classification)
-    rgb = classification_to_rgb(classification).astype(np.float32)
+    rgb = elevation_to_rgb(z).astype(np.float32)
 
     # Binary layout: [x, y, z, r, g, b, classification] — 7 float32 per point
     out = np.empty((len(x), 7), dtype=np.float32)

@@ -5,16 +5,25 @@
       :drawing="lasso.drawing.value"
       :lassoPoints="lasso.lassoPoints.value"
       :processing="lasso.processing.value"
+      :rotateMode="rotateMode"
       @start="lasso.startLasso"
       @addPoint="lasso.addPoint"
       @finish="onLassoFinish"
       @cancel="lasso.cancelLasso"
     />
+    <div class="mode-toggle">
+      <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view">
+        &#8635; Rotate
+      </button>
+      <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection">
+        &#9684; Select
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud3D } from '../../composables/usePointCloud3D.js'
@@ -33,6 +42,13 @@ const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColor
 const lasso = useLasso3D(camera, renderer)
 
 let controls = null
+const rotateMode = ref(true)
+
+function setRotate(val) {
+  rotateMode.value = val
+  if (controls) controls.enabled = val
+  if (val) lasso.cancelLasso()
+}
 
 async function onLassoFinish() {
   const positions = getPositions()
@@ -66,6 +82,7 @@ onMounted(async () => {
     camera.value.lookAt(center.x, center.y, center.z)
     controls = new OrbitControls(camera.value, renderer.value.domElement)
     controls.target.set(center.x, center.y, center.z)
+    controls.enabled = rotateMode.value
     controls.update()
   }
 })
@@ -82,4 +99,15 @@ defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, cam
 <style scoped>
 .canvas3d { position: relative; width: 100%; height: 100%; }
 .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #adf; font-size: 1.2rem; }
+.mode-toggle {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 4px; z-index: 10;
+  background: rgba(0,0,0,0.6); padding: 4px; border-radius: 8px;
+}
+.mode-toggle button {
+  background: #2a3a5a; color: #aac; border: 1px solid #445;
+  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.mode-toggle button.active { background: #3a5a8e; color: #fff; border-color: #7ab3ff; }
+.mode-toggle button:hover:not(.active) { background: #344; }
 </style>
