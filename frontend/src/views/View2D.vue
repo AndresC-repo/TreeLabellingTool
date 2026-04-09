@@ -20,9 +20,9 @@
           v-for="region in store.labeledRegions"
           :key="region.patch_id"
           class="region-item"
-          @click="openPatch(region.patch_id)"
+          @click="openPatch(region)"
         >
-          <span class="patch-id">{{ region.patch_id.slice(0, 8) }}</span>
+          <span class="patch-id">patch_{{ region.patch_number }}</span>
           <span class="patch-pts">{{ region.point_count.toLocaleString() }} pts</span>
         </div>
       </aside>
@@ -48,8 +48,8 @@ const tools = [
   { id: 'fixed',     label: 'Fixed Rect' },
 ]
 
-function openPatch(patchId) {
-  router.push(`/session/${route.params.id}/patch/${patchId}`)
+function openPatch(region) {
+  router.push(`/session/${route.params.id}/patch/${region.patch_id}?n=${region.patch_number}`)
 }
 </script>
 

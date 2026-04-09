@@ -301,6 +301,7 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
     const res = await extractPatch(sessionId, payload)
     store.addRegion({
       patch_id:       res.data.patch_id,
+      patch_number:   res.data.patch_number,
       point_count:    res.data.point_count,
       selection_type: selectionType,
       bounds_2d:      bounds2d,

@@ -19,6 +19,10 @@
         <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'">Elevation</button>
         <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'">Classification</button>
       </div>
+      <div class="btn-group">
+        <button @click="setTopView" title="Top view (Z down)">&#9651; Top</button>
+        <button @click="setSideView" title="Side view">&#9654; Side</button>
+      </div>
     </div>
     <!-- Corner axis triad -->
     <canvas ref="axisCanvas" class="axis-triad"></canvas>
@@ -53,6 +57,28 @@ let axisScene = null
 let axisCamera = null
 let axisAnimId = null
 const rotateMode = ref(true)
+let cloudCenter = null
+let cloudSpan = 1
+
+function setTopView() {
+  if (!cloudCenter || !controls || !camera.value) return
+  const { x, y, z } = cloudCenter
+  camera.value.position.set(x, y, z + cloudSpan * 2)
+  camera.value.up.set(0, 1, 0)
+  camera.value.lookAt(x, y, z)
+  controls.target.set(x, y, z)
+  controls.update()
+}
+
+function setSideView() {
+  if (!cloudCenter || !controls || !camera.value) return
+  const { x, y, z } = cloudCenter
+  camera.value.position.set(x, y - cloudSpan * 2, z)
+  camera.value.up.set(0, 0, 1)
+  camera.value.lookAt(x, y, z)
+  controls.target.set(x, y, z)
+  controls.update()
+}
 
 // ── Axis triad ───────────────────────────────────────────────────────────────
 
@@ -152,6 +178,8 @@ onMounted(async () => {
       if (positions[i+2] < minZ) minZ = positions[i+2]; if (positions[i+2] > maxZ) maxZ = positions[i+2]
     }
     const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ, 1)
+    cloudCenter = center
+    cloudSpan = span
     const dist = span * 1.5
     camera.value.position.set(center.x, center.y - dist, center.z + dist * 0.5)
     camera.value.lookAt(center.x, center.y, center.z)

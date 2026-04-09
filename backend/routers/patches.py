@@ -39,9 +39,11 @@ def extract(session_id: str, req: ExtractionRequest):
 
     # Initialize label state from the extracted classification (avoids redundant file read)
     lm.init_patch(result["patch_id"], result["classification"])
+    patch_number = lm.register_patch(session_id, result["patch_id"])
 
     return ExtractionResponse(
         patch_id=result["patch_id"],
+        patch_number=patch_number,
         point_count=result["point_count"],
         bounds_3d=Bounds(**result["bounds_3d"]),
     )

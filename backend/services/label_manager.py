@@ -2,6 +2,21 @@ import numpy as np
 
 # In-memory store: { patch_id: { "labels": np.ndarray(int32), "used": set[int] } }
 _state: dict = {}
+# Per-session patch counter
+_patch_counters: dict[str, int] = {}
+_patch_number_map: dict[str, int] = {}
+
+
+def register_patch(session_id: str, patch_id: str) -> int:
+    """Assign the next sequential patch number for a session. Returns the number."""
+    n = _patch_counters.get(session_id, 0) + 1
+    _patch_counters[session_id] = n
+    _patch_number_map[patch_id] = n
+    return n
+
+
+def get_patch_number(patch_id: str) -> int:
+    return _patch_number_map.get(patch_id, 0)
 
 
 def init_patch(patch_id: str, original_classification: np.ndarray) -> None:

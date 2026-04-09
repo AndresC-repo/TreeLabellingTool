@@ -20,6 +20,7 @@ class ExtractionRequest(BaseModel):
 
 class ExtractionResponse(BaseModel):
     patch_id: str
+    patch_number: int
     point_count: int
     bounds_3d: Bounds
 

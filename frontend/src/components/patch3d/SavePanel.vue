@@ -1,7 +1,7 @@
 <template>
   <div class="save-panel">
     <h3>Save</h3>
-    <input v-model="filename" placeholder="patch_labeled.las" />
+    <input v-model="filename" placeholder="output.las" />
     <button @click="save" :disabled="saving" class="save-btn">
       {{ saving ? 'Saving...' : 'Save as .las' }}
     </button>
@@ -13,15 +13,32 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { savePatch, getDownloadUrl } from '../../api/client.js'
 import { useRoute } from 'vue-router'
+import { usePatch3DStore } from '../../stores/patch3d.js'
+import { useSessionStore } from '../../stores/session.js'
 
 const route = useRoute()
-const filename = ref('patch_labeled.las')
+const patchStore = usePatch3DStore()
+const session = useSessionStore()
+
 const saving = ref(false)
 const downloadUrl = ref(null)
 const error = ref(null)
+
+// Auto-generate: tree_las_patch_1_101_102.las
+const suggestedFilename = computed(() => {
+  const stem = (session.filename ?? 'output').replace(/\.la[sz]$/i, '')
+  const n = patchStore.patchNumber
+  const labels = patchStore.appliedLabels
+  if (labels.length === 0) return `${stem}_patch_${n}.las`
+  return `${stem}_patch_${n}_${labels.join('_')}.las`
+})
+
+const filename = ref(suggestedFilename.value)
+// Update whenever labels are added or patch number is set
+watch(suggestedFilename, v => { filename.value = v })
 
 async function save() {
   saving.value = true
@@ -44,7 +61,8 @@ input {
   width: 100%;
   background: #2a2a4e; color: #eee;
   border: 1px solid #556; padding: 8px;
-  border-radius: 4px; margin-bottom: 8px; font-size: 13px;
+  border-radius: 4px; margin-bottom: 8px; font-size: 12px;
+  font-family: monospace;
 }
 .save-btn {
   width: 100%; padding: 10px;
