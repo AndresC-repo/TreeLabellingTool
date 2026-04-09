@@ -14,6 +14,11 @@
         ({{ Math.round(decimationRatio * 100) }}% of file)
       </span>
     </div>
+    <div class="point-size-ctrl">
+      <button @click="changePointSize(-1)" :disabled="pointSize <= 1">−</button>
+      <span>{{ pointSize }}px</span>
+      <button @click="changePointSize(1)" :disabled="pointSize >= 8">+</button>
+    </div>
     <!-- SVG overlay for selection drawing -->
     <svg class="svg-overlay"
       @mousedown.stop="onSvgMouseDown"
@@ -77,6 +82,7 @@ const decimationRatio = ref(1)
 // Image state
 let currentImage = null
 let IMG_W = 2048, IMG_H = 2048
+const pointSize = ref(1)
 const bounds = reactive({ xmin: 0, xmax: 1, ymin: 0, ymax: 1 })
 const pan = reactive({ offsetX: 0, offsetY: 0, scale: 1 })
 
@@ -157,10 +163,17 @@ function syncCanvasSize() {
 
 // ── Image loading ────────────────────────────────────────────────────────────
 
+function changePointSize(delta) {
+  const next = Math.max(1, Math.min(8, pointSize.value + delta))
+  if (next === pointSize.value) return
+  pointSize.value = next
+  loadField(store.scalarField || 'classification')
+}
+
 async function loadField(field) {
   loading.value = true
   try {
-    const res = await get2DImage(sessionId, field)
+    const res = await get2DImage(sessionId, field, pointSize.value)
     const h = res.headers
     bounds.xmin = parseFloat(h['x-bounds-xmin'])
     bounds.xmax = parseFloat(h['x-bounds-xmax'])
@@ -221,7 +234,7 @@ const fixedTool    = shallowRef(null)
 let isPanning = false, lastX = 0, lastY = 0
 
 function onMouseDown(e) {
-  if (e.button === 1 || (e.button === 0 && e.altKey)) {
+  if (e.button === 1 || (e.button === 0 && (e.altKey || e.ctrlKey))) {
     isPanning = true; lastX = e.clientX; lastY = e.clientY; e.preventDefault()
   }
 }
@@ -251,7 +264,7 @@ function onWheel(e) {
 // ── SVG event routing ────────────────────────────────────────────────────────
 
 function onSvgMouseDown(e) {
-  if (e.button === 1 || (e.button === 0 && e.altKey)) return
+  if (e.button === 1 || (e.button === 0 && (e.altKey || e.ctrlKey))) return
   if (store.activeTool === 'rectangle') rectTool.value?.onMouseDown(e)
   else if (store.activeTool === 'fixed') fixedTool.value?.onMouseDown(e)
 }
@@ -260,7 +273,7 @@ function onSvgMouseMove(e) {
   else if (store.activeTool === 'fixed') fixedTool.value?.onMouseMove(e)
 }
 async function onSvgMouseUp(e) {
-  if (e.button === 1 || (e.button === 0 && e.altKey)) return
+  if (e.button === 1 || (e.button === 0 && (e.altKey || e.ctrlKey))) return
   if (store.activeTool === 'rectangle') {
     const b = rectTool.value?.onMouseUp(e)
     if (b) await doExtract('rectangle', b, null)
@@ -316,6 +329,21 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
   padding: 3px 10px; border-radius: 8px; font-size: 12px; pointer-events: none;
 }
 .dim { opacity: 0.7; margin-left: 4px; }
+.point-size-ctrl {
+  position: absolute; bottom: 12px; right: 12px;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.6); padding: 4px 8px;
+  border-radius: 8px; pointer-events: all;
+}
+.point-size-ctrl button {
+  background: #2a3a5a; border: 1px solid #445; color: #eee;
+  width: 24px; height: 24px; border-radius: 4px;
+  cursor: pointer; font-size: 16px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.point-size-ctrl button:hover:not(:disabled) { background: #3a4a7a; }
+.point-size-ctrl button:disabled { opacity: 0.35; cursor: default; }
+.point-size-ctrl span { color: #cce; font-size: 12px; min-width: 28px; text-align: center; }
 .svg-overlay {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
   pointer-events: all;

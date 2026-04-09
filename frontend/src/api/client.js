@@ -19,9 +19,9 @@ export const get2DPoints = (sessionId, scalarField = 'classification', maxPoints
     responseType: 'arraybuffer',
   })
 
-export const get2DImage = (sessionId, scalarField = 'classification', width = 2048, height = 2048) =>
+export const get2DImage = (sessionId, scalarField = 'classification', pointSize = 1, width = 2048, height = 2048) =>
   api.get(`/view/${sessionId}/image`, {
-    params: { scalar_field: scalarField, width, height },
+    params: { scalar_field: scalarField, point_size: pointSize, width, height },
     responseType: 'blob',
   })
 

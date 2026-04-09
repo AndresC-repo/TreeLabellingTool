@@ -6,7 +6,7 @@ from PIL import Image
 from services.point_cache import get_session_points
 from services.projection import classification_to_rgb, intensity_to_rgb, returns_to_rgb
 
-_render_cache: dict = {}  # (session_id, field, width, height) -> (png_bytes, meta)
+_render_cache: dict = {}  # (session_id, field, width, height, point_size) -> (png_bytes, meta)
 
 
 def render_top_view(
@@ -15,8 +15,10 @@ def render_top_view(
     scalar_field: str,
     width: int = 2048,
     height: int = 2048,
+    point_size: int = 1,
 ) -> tuple[bytes, dict]:
-    key = (session_id, scalar_field, width, height)
+    point_size = max(1, min(point_size, 8))
+    key = (session_id, scalar_field, width, height, point_size)
     if key in _render_cache:
         return _render_cache[key]
 
@@ -48,7 +50,17 @@ def render_top_view(
     rgb8 = (rgb_f * 255).clip(0, 255).astype(np.uint8)
 
     img_arr = np.full((height, width, 3), [26, 26, 46], dtype=np.uint8)
-    img_arr[py, px] = rgb8
+
+    if point_size == 1:
+        img_arr[py, px] = rgb8
+    else:
+        # Draw square footprint of radius r around each point
+        r = point_size // 2
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                py_off = np.clip(py + dy, 0, height - 1)
+                px_off = np.clip(px + dx, 0, width - 1)
+                img_arr[py_off, px_off] = rgb8
 
     img = Image.fromarray(img_arr, "RGB")
     buf = BytesIO()

@@ -80,6 +80,7 @@ def get_2d_image(
     scalar_field: str = "classification",
     width: int = Query(2048, ge=256, le=4096),
     height: int = Query(2048, ge=256, le=4096),
+    point_size: int = Query(1, ge=1, le=8),
 ):
     las_path = get_las_path(session_id)
     if not las_path.exists():
@@ -87,7 +88,7 @@ def get_2d_image(
     if scalar_field not in VALID_SCALAR_FIELDS:
         raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
 
-    png_bytes, meta = render_top_view(session_id, las_path, scalar_field, width, height)
+    png_bytes, meta = render_top_view(session_id, las_path, scalar_field, width, height, point_size)
     b = meta["bounds"]
     return Response(
         content=png_bytes,
