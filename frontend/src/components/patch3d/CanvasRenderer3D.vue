@@ -6,8 +6,7 @@
       :lassoPoints="lasso.lassoPoints.value"
       :processing="lasso.processing.value"
       :rotateMode="rotateMode"
-      @start="lasso.startLasso"
-      @addPoint="lasso.addPoint"
+      @addVertex="lasso.addVertex"
       @finish="onLassoFinish"
       @cancel="lasso.cancelLasso"
     />
@@ -47,7 +46,7 @@ const rotateMode = ref(true)
 function setRotate(val) {
   rotateMode.value = val
   if (controls) controls.enabled = val
-  if (val) lasso.cancelLasso()
+  if (val) lasso.cancelLasso()   // clear any in-progress lasso when switching to rotate
 }
 
 async function onLassoFinish() {

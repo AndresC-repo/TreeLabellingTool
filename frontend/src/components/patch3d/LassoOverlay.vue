@@ -3,9 +3,8 @@
     ref="canvas"
     class="lasso-canvas"
     :style="{ pointerEvents: rotateMode ? 'none' : 'all' }"
-    @mousedown="onDown"
+    @click="onLeftClick"
     @mousemove="onMove"
-    @dblclick="onFinish"
     @contextmenu.prevent="onFinish"
     @keydown.esc.prevent="onCancel"
     tabindex="0"
@@ -21,7 +20,7 @@ const props = defineProps({
   processing: Boolean,
   rotateMode: Boolean,
 })
-const emit = defineEmits(['start', 'addPoint', 'finish', 'cancel'])
+const emit = defineEmits(['addVertex', 'previewMove', 'finish', 'cancel'])
 
 const canvas = ref(null)
 let ctx = null
@@ -42,30 +41,56 @@ function syncSize() {
   c.height = c.offsetHeight
 }
 
-watch(() => props.lassoPoints, () => {
+const previewPoint = ref(null)
+
+function redraw() {
   if (!ctx || !canvas.value) return
   ctx.clearRect(0, 0, canvas.value.width, canvas.value.height)
   const pts = props.lassoPoints
   if (!pts || pts.length === 0) return
+
+  ctx.strokeStyle = '#ffff00'
+  ctx.lineWidth = 2
+
+  // Filled polygon (confirmed vertices)
   ctx.beginPath()
   ctx.moveTo(pts[0].x, pts[0].y)
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
-  if (!props.drawing) ctx.closePath()
-  ctx.strokeStyle = '#ffff00'
-  ctx.lineWidth = 2
-  ctx.setLineDash(props.drawing ? [] : [4, 4])
-  ctx.stroke()
-  // Fill semi-transparent if drawing
-  if (props.drawing && pts.length > 2) {
+  if (pts.length > 2) {
     ctx.fillStyle = 'rgba(255, 255, 0, 0.08)'
     ctx.fill()
   }
-}, { deep: true })
+  ctx.setLineDash([])
+  ctx.stroke()
 
-function onDown(e) { emit('start', e) }
-function onMove(e) { emit('addPoint', e) }
-function onFinish(e) { emit('finish', e) }
-function onCancel(e) { emit('cancel', e) }
+  // Draw vertex dots
+  ctx.fillStyle = '#ffff00'
+  for (const p of pts) {
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  // Preview line from last vertex to cursor
+  if (previewPoint.value && props.drawing) {
+    const last = pts[pts.length - 1]
+    ctx.beginPath()
+    ctx.moveTo(last.x, last.y)
+    ctx.lineTo(previewPoint.value.x, previewPoint.value.y)
+    ctx.setLineDash([4, 4])
+    ctx.strokeStyle = 'rgba(255,255,0,0.5)'
+    ctx.stroke()
+    ctx.setLineDash([])
+  }
+}
+
+watch(() => props.lassoPoints, redraw, { deep: true })
+watch(previewPoint, redraw, { deep: true })
+
+function onLeftClick(e) { if (e.button === 0) emit('addVertex', e) }
+function onMove(e) { previewPoint.value = { x: e.offsetX, y: e.offsetY }; emit('previewMove', e) }
+function onFinish(e) { previewPoint.value = null; emit('finish', e) }
+function onCancel(e) { previewPoint.value = null; emit('cancel', e) }
 </script>
 
 <style scoped>

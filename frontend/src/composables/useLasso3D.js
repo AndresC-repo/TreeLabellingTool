@@ -7,14 +7,9 @@ export function useLasso3D(camera, renderer) {
   const lassoPoints = ref([]) // screen-space {x, y}
   const processing = ref(false)
 
-  function startLasso(e) {
-    drawing.value = true
-    lassoPoints.value = [{ x: e.offsetX, y: e.offsetY }]
-  }
-
-  function addPoint(e) {
-    if (!drawing.value) return
+  function addVertex(e) {
     lassoPoints.value = [...lassoPoints.value, { x: e.offsetX, y: e.offsetY }]
+    drawing.value = true
   }
 
   function cancelLasso() {
@@ -60,5 +55,5 @@ export function useLasso3D(camera, renderer) {
     })
   }
 
-  return { drawing, lassoPoints, processing, startLasso, addPoint, cancelLasso, finishLasso }
+  return { drawing, lassoPoints, processing, addVertex, cancelLasso, finishLasso }
 }
