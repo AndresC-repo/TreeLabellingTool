@@ -1,10 +1,10 @@
 import * as THREE from 'three'
-import { onMounted, onBeforeUnmount, ref } from 'vue'
+import { onMounted, onBeforeUnmount, shallowRef } from 'vue'
 
 export function useThreeScene(containerRef, cameraType = 'orthographic') {
-  const renderer = ref(null)
-  const scene = ref(null)
-  const camera = ref(null)
+  const renderer = shallowRef(null)
+  const scene = shallowRef(null)
+  const camera = shallowRef(null)
   let animFrameId = null
   let resizeObserver = null
 
