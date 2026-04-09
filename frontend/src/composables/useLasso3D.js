@@ -29,7 +29,8 @@ export function useLasso3D(camera, renderer) {
     const mvp = new THREE.Matrix4()
     mvp.multiplyMatrices(camera.value.projectionMatrix, camera.value.matrixWorldInverse)
     const mvpArr = new Float32Array(mvp.elements)
-    const polygon = lassoPoints.value.slice()
+    // Strip Vue reactive proxies — postMessage requires plain cloneable objects
+    const polygon = lassoPoints.value.map(p => ({ x: p.x, y: p.y }))
     lassoPoints.value = []
 
     return new Promise((resolve) => {
