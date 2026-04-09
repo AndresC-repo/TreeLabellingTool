@@ -2,7 +2,7 @@
   <div class="upload-page">
     <div class="header">
       <h1>Point Cloud Labeling Tool</h1>
-      <p class="subtitle">Upload a <code>.las</code> file to begin labeling</p>
+      <p class="subtitle">Upload a <code>.las</code> or <code>.laz</code> file to begin labeling</p>
     </div>
     <DropZone />
   </div>

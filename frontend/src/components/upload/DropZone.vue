@@ -7,10 +7,10 @@
     @drop.prevent="onDrop"
     @click="inputRef.click()"
   >
-    <input ref="inputRef" type="file" accept=".las,.LAS" style="display:none" @change="onFileChange" />
+    <input ref="inputRef" type="file" accept=".las,.LAS,.laz,.LAZ" style="display:none" @change="onFileChange" />
     <template v-if="!uploading">
       <p class="icon">📂</p>
-      <p>Drop a <code>.las</code> file here or <strong>click to browse</strong></p>
+      <p>Drop a <code>.las</code> or <code>.laz</code> file here or <strong>click to browse</strong></p>
     </template>
     <div v-else class="progress-wrap">
       <div class="progress-bar-track">
@@ -50,8 +50,8 @@ async function onFileChange(e) {
 }
 
 async function upload(file) {
-  if (!file.name.match(/\.las$/i)) {
-    error.value = 'Only .las files are supported'
+  if (!file.name.match(/\.(las|laz)$/i)) {
+    error.value = 'Only .las and .laz files are supported'
     return
   }
   uploading.value = true

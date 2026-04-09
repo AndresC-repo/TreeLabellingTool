@@ -109,7 +109,7 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
         raise HTTPException(404, "Patch label state not found")
     # Sanitize filename: only allow alphanumerics, dashes, underscores, dots
     safe_name = re.sub(r"[^\w\-.]", "_", req.output_filename)
-    if not safe_name.lower().endswith(".las"):
+    if not safe_name.lower().endswith((".las", ".laz")):
         safe_name += ".las"
     output_dir = get_session_dir(session_id) / "outputs" / patch_id
     output_dir.mkdir(parents=True, exist_ok=True)

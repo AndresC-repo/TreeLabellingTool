@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from models.schemas import UploadResponse, Bounds
 from services.las_reader import create_session, get_las_path, read_metadata, get_session_dir
@@ -9,12 +10,13 @@ router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
 @router.post("/upload", response_model=UploadResponse)
 def upload_file(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".las"):
-        raise HTTPException(400, "Only .las files are supported")
+    ext = Path(file.filename).suffix.lower()
+    if ext not in (".las", ".laz"):
+        raise HTTPException(400, "Only .las and .laz files are supported")
 
     session_id = create_session()
     try:
-        dest = get_las_path(session_id)
+        dest = get_session_dir(session_id) / f"original{ext}"
         # Stream to disk while enforcing size limit
         written = 0
         with open(dest, "wb") as out:

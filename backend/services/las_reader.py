@@ -20,7 +20,12 @@ def create_session() -> str:
 
 
 def get_las_path(session_id: str) -> Path:
-    return get_session_dir(session_id) / "original.las"
+    d = get_session_dir(session_id)
+    for name in ("original.las", "original.laz"):
+        p = d / name
+        if p.exists():
+            return p
+    return d / "original.las"  # fallback (will 404 if missing)
 
 
 def read_metadata(session_id: str) -> dict:
