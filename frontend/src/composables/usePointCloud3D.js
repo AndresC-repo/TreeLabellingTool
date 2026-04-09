@@ -16,6 +16,7 @@ const LABEL_PALETTE = [
 ]
 
 function paletteColor(labelValue) {
+  if (labelValue === 0) return [0.28, 0.28, 0.32]   // gray — same as unlabeled
   const idx = Math.max(0, labelValue - 101) % LABEL_PALETTE.length
   return LABEL_PALETTE[idx]
 }

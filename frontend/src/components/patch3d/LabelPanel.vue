@@ -17,6 +17,13 @@
     >
       {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }}
     </button>
+    <button
+      class="gnd-btn"
+      :disabled="store.selectedIndices.length === 0 || applying"
+      @click="applyGnd"
+    >
+      Label GND (0)
+    </button>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
   </div>
 </template>
@@ -37,6 +44,25 @@ watch(() => store.nextLabel, v => { labelValue.value = v })
 
 function increment() { labelValue.value++ }
 function decrement() { labelValue.value = Math.max(0, labelValue.value - 1) }
+
+async function applyGnd() {
+  if (store.selectedIndices.length === 0) return
+  applying.value = true
+  try {
+    await labelPoints(route.params.id, route.params.patchId, {
+      point_indices: Array.from(store.selectedIndices),
+      label_value: 0,
+    })
+    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: 0 }
+    store.viewMode = 'classification'
+    // 0 is intentionally not added to appliedLabels (excluded from filename)
+    store.selectedIndices = []
+  } catch (err) {
+    console.error('GND label failed:', err)
+  } finally {
+    applying.value = false
+  }
+}
 
 async function applyLabel() {
   if (store.selectedIndices.length === 0) return
@@ -89,6 +115,14 @@ input::-webkit-inner-spin-button { opacity: 0.5; }
 }
 .apply-btn:hover:not(:disabled) { background: #3a6aae; }
 .apply-btn:disabled { opacity: 0.4; cursor: default; }
+.gnd-btn {
+  width: 100%; padding: 8px;
+  background: #3a3a3a; border: 1px solid #555;
+  border-radius: 6px; color: #aaa; cursor: pointer; font-size: 13px;
+  margin-top: 6px;
+}
+.gnd-btn:hover:not(:disabled) { background: #4a4a4a; color: #ccc; }
+.gnd-btn:disabled { opacity: 0.4; cursor: default; }
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
 </style>

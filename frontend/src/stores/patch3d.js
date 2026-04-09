@@ -14,7 +14,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const lastApplied = ref(null)   // { indices: number[], labelValue: number }
 
   function addAppliedLabel(labelValue) {
-    if (!appliedLabels.value.includes(labelValue)) {
+    if (labelValue !== 0 && !appliedLabels.value.includes(labelValue)) {
       appliedLabels.value = [...appliedLabels.value, labelValue].sort((a, b) => a - b)
     }
   }
