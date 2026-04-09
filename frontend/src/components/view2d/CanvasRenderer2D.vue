@@ -224,6 +224,7 @@ onBeforeUnmount(() => {
 })
 
 watch(() => store.scalarField, field => loadField(field))
+watch(() => store.labeledRegions, () => draw(), { deep: true })
 
 // ── Selection tools (assigned after mount) ───────────────────────────────────
 

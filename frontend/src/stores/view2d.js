@@ -14,6 +14,10 @@ export const useView2DStore = defineStore('view2d', () => {
     labeledRegions.value.push(region)
   }
 
+  function removeRegion(patchId) {
+    labeledRegions.value = labeledRegions.value.filter(r => r.patch_id !== patchId)
+  }
+
   function clearActiveSelection() {
     activeSelection.value = null
   }
@@ -24,6 +28,7 @@ export const useView2DStore = defineStore('view2d', () => {
     labeledRegions,
     activeSelection,
     addRegion,
+    removeRegion,
     clearActiveSelection,
   }
 })

@@ -11,6 +11,7 @@
           @click="store.activeTool = tool.id"
         >{{ tool.label }}</button>
       </div>
+      <button class="load-btn" @click="router.push('/')">&#8593; Load new point cloud</button>
     </header>
     <div class="main-area">
       <CanvasRenderer2D class="canvas-area" />
@@ -22,6 +23,7 @@
           class="region-item"
           @click="openPatch(region)"
         >
+          <button class="remove-btn" @click.stop="store.removeRegion(region.patch_id)" title="Remove region">&#x2715;</button>
           <span class="patch-id">patch_{{ region.patch_number }}</span>
           <span class="patch-pts">{{ region.point_count.toLocaleString() }} pts</span>
         </div>
@@ -106,6 +108,17 @@ h3 { color: #adf; font-size: 13px; font-weight: 600; margin-bottom: 12px; text-t
   transition: background 0.1s;
 }
 .region-item:hover { background: #2a2a4e; border-color: #445; }
-.patch-id { color: #aac; font-family: monospace; }
+.remove-btn {
+  background: none; border: none; color: #556; cursor: pointer;
+  font-size: 12px; padding: 0 4px; line-height: 1; flex-shrink: 0;
+}
+.remove-btn:hover { color: #f66; }
+.patch-id { color: #aac; font-family: monospace; flex: 1; }
 .patch-pts { color: #778; }
+.load-btn {
+  background: #1a3a2a; color: #6db; border: 1px solid #2a5a3a;
+  padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  white-space: nowrap;
+}
+.load-btn:hover { background: #2a4a3a; }
 </style>
