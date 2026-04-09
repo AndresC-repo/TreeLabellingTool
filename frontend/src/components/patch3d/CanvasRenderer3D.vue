@@ -10,13 +10,15 @@
       @finish="onLassoFinish"
       @cancel="lasso.cancelLasso"
     />
-    <div class="mode-toggle">
-      <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view">
-        &#8635; Rotate
-      </button>
-      <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection">
-        &#9684; Select
-      </button>
+    <div class="toolbar-overlay">
+      <div class="btn-group">
+        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view">&#8635; Rotate</button>
+        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection">&#9684; Select</button>
+      </div>
+      <div class="btn-group">
+        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'">Elevation</button>
+        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'">Classification</button>
+      </div>
     </div>
   </div>
 </template>
@@ -36,7 +38,8 @@ const route = useRoute()
 const store = usePatch3DStore()
 
 const { scene, camera, renderer } = useThreeScene(container, 'perspective')
-const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, getPositions, dispose } = usePointCloud3D(scene, route.params.id, route.params.patchId)
+const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
+const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, getPositions, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -46,8 +49,17 @@ const rotateMode = ref(true)
 function setRotate(val) {
   rotateMode.value = val
   if (controls) controls.enabled = val
-  if (val) lasso.cancelLasso()   // clear any in-progress lasso when switching to rotate
+  if (val) lasso.cancelLasso()
 }
+
+// React to store viewMode changes (from buttons here or from LabelPanel)
+watch(() => store.viewMode, mode => setViewMode(mode))
+
+// React to a label being applied (from LabelPanel)
+watch(() => store.lastApplied, applied => {
+  if (!applied) return
+  applyLabelColor(applied.indices, applied.labelValue)
+})
 
 async function onLassoFinish() {
   const positions = getPositions()
@@ -68,7 +80,6 @@ onMounted(async () => {
   store.pointCount = pointCount.value
   if (result?.center && camera.value) {
     const { center, positions } = result
-    // Compute bounding box extents from positions to set proportional camera offset
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity
     for (let i = 0; i < positions.length; i += 3) {
       if (positions[i]   < minX) minX = positions[i];   if (positions[i]   > maxX) maxX = positions[i]
@@ -91,22 +102,24 @@ onBeforeUnmount(() => {
   dispose()
 })
 
-// Expose for parent (lasso integration in Task 10)
 defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer })
 </script>
 
 <style scoped>
 .canvas3d { position: relative; width: 100%; height: 100%; }
 .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #adf; font-size: 1.2rem; }
-.mode-toggle {
+.toolbar-overlay {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 4px; z-index: 10;
-  background: rgba(0,0,0,0.6); padding: 4px; border-radius: 8px;
+  display: flex; gap: 8px; z-index: 10;
+  background: rgba(0,0,0,0.6); padding: 4px 6px; border-radius: 8px;
+  pointer-events: all;
 }
-.mode-toggle button {
+.btn-group { display: flex; gap: 3px; }
+.btn-group + .btn-group { border-left: 1px solid #445; padding-left: 8px; }
+.toolbar-overlay button {
   background: #2a3a5a; color: #aac; border: 1px solid #445;
-  padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: 12px;
 }
-.mode-toggle button.active { background: #3a5a8e; color: #fff; border-color: #7ab3ff; }
-.mode-toggle button:hover:not(.active) { background: #344; }
+.toolbar-overlay button.active { background: #3a5a8e; color: #fff; border-color: #7ab3ff; }
+.toolbar-overlay button:hover:not(.active) { background: #344; color: #eee; }
 </style>

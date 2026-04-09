@@ -8,6 +8,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const selectedIndices = ref([])
   const savedUrl = ref(null)
   const lassoProcessing = ref(false)
+  const viewMode = ref('elevation')            // 'elevation' | 'classification'
+  const lastApplied = ref(null)               // { indices: number[], labelValue: number }
 
   function reset() {
     patchId.value = null
@@ -16,7 +18,9 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     selectedIndices.value = []
     savedUrl.value = null
     lassoProcessing.value = false
+    viewMode.value = 'elevation'
+    lastApplied.value = null
   }
 
-  return { patchId, pointCount, nextLabel, selectedIndices, savedUrl, lassoProcessing, reset }
+  return { patchId, pointCount, nextLabel, selectedIndices, savedUrl, lassoProcessing, viewMode, lastApplied, reset }
 })

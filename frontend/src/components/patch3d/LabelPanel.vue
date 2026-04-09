@@ -46,6 +46,9 @@ async function applyLabel() {
       point_indices: Array.from(store.selectedIndices),
       label_value: labelValue.value,
     })
+    // Signal the canvas to recolor + switch view before clearing selection
+    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: labelValue.value }
+    store.viewMode = 'classification'
     const res = await getNextLabel(route.params.id, route.params.patchId)
     store.nextLabel = res.data.next_label
     store.selectedIndices = []
