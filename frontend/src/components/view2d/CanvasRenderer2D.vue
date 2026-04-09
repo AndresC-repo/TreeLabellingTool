@@ -14,6 +14,7 @@
         ({{ Math.round(decimationRatio * 100) }}% of file)
       </span>
     </div>
+    <div v-if="extractError" class="extract-error" @click="extractError = null">{{ extractError }}</div>
     <div class="point-size-ctrl">
       <button @click="changePointSize(-1)" :disabled="pointSize <= 1">−</button>
       <span>{{ pointSize }}px</span>
@@ -21,11 +22,11 @@
     </div>
     <!-- SVG overlay for selection drawing -->
     <svg class="svg-overlay"
-      @mousedown.stop="onSvgMouseDown"
-      @mousemove.stop="onSvgMouseMove"
-      @mouseup.stop="onSvgMouseUp"
-      @click.stop="onSvgClick"
-      @contextmenu.prevent.stop="onSvgContextMenu"
+      @mousedown="onSvgMouseDown"
+      @mousemove="onSvgMouseMove"
+      @mouseup="onSvgMouseUp"
+      @click="onSvgClick"
+      @contextmenu.prevent="onSvgContextMenu"
     >
       <rect
         v-if="store.activeTool === 'rectangle' && rectTool?.selecting?.value"
@@ -78,6 +79,7 @@ const canvasRef = ref(null)
 const loading = ref(false)
 const pointCount = ref(0)
 const decimationRatio = ref(1)
+const extractError = ref(null)
 
 // Image state
 let currentImage = null
@@ -307,6 +309,7 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
     draw()
   } catch (err) {
     console.error('Patch extraction failed:', err)
+    extractError.value = err.response?.data?.detail || 'No points found in selection — try a larger area'
   }
 }
 </script>
@@ -330,7 +333,7 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
 }
 .dim { opacity: 0.7; margin-left: 4px; }
 .point-size-ctrl {
-  position: absolute; bottom: 12px; right: 12px;
+  position: absolute; bottom: 12px; right: 12px; z-index: 10;
   display: flex; align-items: center; gap: 6px;
   background: rgba(0,0,0,0.6); padding: 4px 8px;
   border-radius: 8px; pointer-events: all;
@@ -346,6 +349,12 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
 .point-size-ctrl span { color: #cce; font-size: 12px; min-width: 28px; text-align: center; }
 .svg-overlay {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: all;
+  pointer-events: all; z-index: 5;
+}
+.extract-error {
+  position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+  background: rgba(180,40,40,0.9); color: #fff; padding: 8px 18px;
+  border-radius: 8px; font-size: 13px; cursor: pointer; z-index: 20;
+  max-width: 80%; text-align: center;
 }
 </style>
