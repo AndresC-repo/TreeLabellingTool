@@ -15,10 +15,25 @@ const LABEL_PALETTE = [
   [0.5, 1, 0],    // chartreuse
 ]
 
+function hue2rgb(p, q, t) {
+  if (t < 0) t += 1; if (t > 1) t -= 1
+  if (t < 1/6) return p + (q - p) * 6 * t
+  if (t < 1/2) return q
+  if (t < 2/3) return p + (q - p) * (2/3 - t) * 6
+  return p
+}
+function hslToRgb(h, s, l) {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  return [hue2rgb(p, q, h + 1/3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1/3)]
+}
+
 function paletteColor(labelValue) {
-  if (labelValue === 0) return [0.28, 0.28, 0.32]   // gray — same as unlabeled
-  const idx = Math.max(0, labelValue - 101) % LABEL_PALETTE.length
-  return LABEL_PALETTE[idx]
+  if (labelValue === 0) return [0.28, 0.28, 0.32]          // gray (GND)
+  if (labelValue >= 101 && labelValue <= 108) return LABEL_PALETTE[labelValue - 101]
+  // Golden-angle hash for 109+ and large instance labels (1001, 1201, …)
+  const hue = ((labelValue * 137.508) % 360) / 360
+  return hslToRgb(hue, 0.85, 0.55)
 }
 
 export function usePointCloud3D(scene, sessionId, patchId) {

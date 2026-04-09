@@ -128,7 +128,8 @@ def get_colormap(
         entries = []
         for code, count in zip(unique_codes.tolist(), counts.tolist()):
             r, g, b = get_classification_color(int(code))
-            label = _CLASS_LABELS.get(int(code), f"Label {int(code)}" if int(code) >= 100 else f"Class {int(code)}")
+            known = _CLASS_LABELS.get(int(code))
+            label = f"{int(code)} - {known}" if known else str(int(code))
             entries.append({
                 "value": int(code),
                 "label": label,
