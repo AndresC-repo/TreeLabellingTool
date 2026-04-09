@@ -4,7 +4,7 @@ import numpy as np
 from io import BytesIO
 from PIL import Image
 from services.point_cache import get_session_points
-from services.projection import classification_to_rgb, intensity_to_rgb, returns_to_rgb
+from services.projection import classification_to_rgb, intensity_to_rgb, returns_to_rgb, elevation_to_rgb
 
 _render_cache: dict = {}  # (session_id, field, width, height, point_size) -> (png_bytes, meta)
 
@@ -40,8 +40,11 @@ def render_top_view(
     px = np.clip(((x - xmin) / (xmax - xmin) * (width - 1)).astype(np.int32), 0, width - 1)
     py = np.clip(((ymax - y) / (ymax - ymin) * (height - 1)).astype(np.int32), 0, height - 1)
 
-    scalar = data[scalar_field]
-    if scalar_field == "classification":
+    scalar_key = "z" if scalar_field == "elevation" else scalar_field
+    scalar = data[scalar_key]
+    if scalar_field == "elevation":
+        rgb_f = elevation_to_rgb(scalar)
+    elif scalar_field == "classification":
         rgb_f = classification_to_rgb(scalar)
     elif scalar_field == "intensity":
         rgb_f = intensity_to_rgb(scalar)

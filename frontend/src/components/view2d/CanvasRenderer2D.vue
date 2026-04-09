@@ -210,7 +210,7 @@ onMounted(async () => {
   syncCanvasSize()
   resizeObserver = new ResizeObserver(syncCanvasSize)
   resizeObserver.observe(containerRef.value)
-  await loadField(store.scalarField || 'classification')
+  await loadField(store.scalarField || 'elevation')
   await nextTick()
   const domRef = ref(canvasRef.value)
   rectTool.value     = useSelectionRect(toWorld, domRef)

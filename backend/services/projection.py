@@ -33,6 +33,24 @@ def intensity_to_rgb(values: np.ndarray) -> np.ndarray:
     return np.stack([norm, norm, norm], axis=1)
 
 
+def elevation_to_rgb(values: np.ndarray) -> np.ndarray:
+    """Map Z elevation to Blue→Green→Yellow→Red gradient (matches CloudCompare default)."""
+    z_min, z_max = float(values.min()), float(values.max())
+    if z_max == z_min:
+        return np.full((len(values), 3), [0.0, 0.5, 1.0], dtype=np.float32)
+    t = (values.astype(np.float32) - z_min) / (z_max - z_min)  # 0..1
+
+    # Piecewise: Blue(0) → Green(1/3) → Yellow(2/3) → Red(1)
+    r = np.where(t < 1/3, 0.0,
+        np.where(t < 2/3, (t - 1/3) * 3.0, 1.0)).astype(np.float32)
+    g = np.where(t < 1/3, t * 3.0,
+        np.where(t < 2/3, 1.0,
+        1.0 - (t - 2/3) * 3.0)).astype(np.float32)
+    b = np.where(t < 1/3, 1.0 - t * 3.0, 0.0).astype(np.float32)
+
+    return np.stack([r, g, b], axis=1)
+
+
 def returns_to_rgb(values: np.ndarray) -> np.ndarray:
     """Map number_of_returns (1-7) to a red→green color gradient."""
     norm = np.clip((values.astype(np.float32) - 1) / 6.0, 0.0, 1.0)

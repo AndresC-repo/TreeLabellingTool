@@ -15,7 +15,7 @@ from config import DEFAULT_MAX_POINTS
 
 router = APIRouter(prefix="/api/v1/view", tags=["view"])
 
-VALID_SCALAR_FIELDS = {"classification", "intensity", "number_of_returns"}
+VALID_SCALAR_FIELDS = {"classification", "intensity", "number_of_returns", "elevation"}
 
 # ASPRS human-readable labels for classification codes
 _CLASS_LABELS = {

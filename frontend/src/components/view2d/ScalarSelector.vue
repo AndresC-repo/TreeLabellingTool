@@ -2,6 +2,7 @@
   <label class="scalar-selector">
     <span>Color by:</span>
     <select v-model="store.scalarField">
+      <option value="elevation">Elevation (Z)</option>
       <option value="classification">Classification</option>
       <option value="intensity">Intensity</option>
       <option value="number_of_returns">Number of Returns</option>
