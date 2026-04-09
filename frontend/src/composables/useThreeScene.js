@@ -7,6 +7,9 @@ export function useThreeScene(containerRef, cameraType = 'orthographic') {
   const camera = shallowRef(null)
   let animFrameId = null
   let resizeObserver = null
+  let _onFrame = null   // optional per-frame callback (e.g. controls.update)
+
+  function setOnFrame(fn) { _onFrame = fn }
 
   function init() {
     const el = containerRef.value
@@ -31,6 +34,7 @@ export function useThreeScene(containerRef, cameraType = 'orthographic') {
 
     function animate() {
       animFrameId = requestAnimationFrame(animate)
+      if (_onFrame) _onFrame()
       renderer.value.render(scene.value, camera.value)
     }
     animate()
@@ -61,5 +65,5 @@ export function useThreeScene(containerRef, cameraType = 'orthographic') {
     renderer.value?.dispose()
   })
 
-  return { renderer, scene, camera }
+  return { renderer, scene, camera, setOnFrame }
 }
