@@ -3,12 +3,14 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from services.las_reader import get_las_path
 from services.decimator import read_decimated
+from services.point_cache import get_session_points
 from services.projection import (
     classification_to_rgb,
     intensity_to_rgb,
     returns_to_rgb,
     build_2d_buffer,
     CLASSIFICATION_COLORS,
+    get_classification_color,
 )
 from services.renderer2d import render_top_view
 from config import DEFAULT_MAX_POINTS
@@ -120,16 +122,19 @@ def get_colormap(
         raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
 
     if scalar_field == "classification":
-        entries = [
-            {
-                "value": code,
-                "label": _CLASS_LABELS.get(code, f"Class {code}"),
-                "color": "#{:02x}{:02x}{:02x}".format(
-                    round(r * 255), round(g * 255), round(b * 255)
-                ),
-            }
-            for code, (r, g, b) in CLASSIFICATION_COLORS.items()
-        ]
+        cached = get_session_points(session_id, las_path)
+        classification = cached["data"]["classification"]
+        unique_codes, counts = np.unique(classification, return_counts=True)
+        entries = []
+        for code, count in zip(unique_codes.tolist(), counts.tolist()):
+            r, g, b = get_classification_color(int(code))
+            label = _CLASS_LABELS.get(int(code), f"Label {int(code)}" if int(code) >= 100 else f"Class {int(code)}")
+            entries.append({
+                "value": int(code),
+                "label": label,
+                "color": "#{:02x}{:02x}{:02x}".format(round(r * 255), round(g * 255), round(b * 255)),
+                "count": int(count),
+            })
         return {"field": scalar_field, "type": "categorical", "entries": entries}
 
     return {"field": scalar_field, "type": "continuous", "entries": []}

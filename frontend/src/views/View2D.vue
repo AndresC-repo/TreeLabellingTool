@@ -14,6 +14,7 @@
       <button class="load-btn" @click="router.push('/')">&#8593; Load new point cloud</button>
     </header>
     <div class="main-area">
+      <ClassificationLegend v-if="store.scalarField === 'classification'" />
       <CanvasRenderer2D class="canvas-area" />
       <aside v-if="store.labeledRegions.length > 0" class="side-panel">
         <h3>Labeled Regions</h3>
@@ -38,6 +39,7 @@ import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
+import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
 
 const route  = useRoute()
 const router = useRouter()

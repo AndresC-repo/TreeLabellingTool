@@ -9,6 +9,12 @@ from services.projection import classification_to_rgb, intensity_to_rgb, returns
 _render_cache: dict = {}  # (session_id, field, width, height, point_size) -> (png_bytes, meta)
 
 
+def invalidate_session(session_id: str) -> None:
+    """Drop all cached renders for a session (e.g. after re-labeling)."""
+    for key in [k for k in _render_cache if k[0] == session_id]:
+        del _render_cache[key]
+
+
 def render_top_view(
     session_id: str,
     las_path,
