@@ -19,11 +19,11 @@
     >
       <!-- Rectangle selection indicator -->
       <rect
-        v-if="store.activeTool === 'rectangle' && rectTool.value?.selecting?.value"
-        :x="Math.min(rectTool.value.svgRect.x1, rectTool.value.svgRect.x2)"
-        :y="Math.min(rectTool.value.svgRect.y1, rectTool.value.svgRect.y2)"
-        :width="Math.abs(rectTool.value.svgRect.x2 - rectTool.value.svgRect.x1)"
-        :height="Math.abs(rectTool.value.svgRect.y2 - rectTool.value.svgRect.y1)"
+        v-if="store.activeTool === 'rectangle' && rectTool?.selecting?.value"
+        :x="Math.min(rectTool.svgRect.x1, rectTool.svgRect.x2)"
+        :y="Math.min(rectTool.svgRect.y1, rectTool.svgRect.y2)"
+        :width="Math.abs(rectTool.svgRect.x2 - rectTool.svgRect.x1)"
+        :height="Math.abs(rectTool.svgRect.y2 - rectTool.svgRect.y1)"
         fill="rgba(122,179,255,0.1)"
         stroke="#7ab3ff"
         stroke-width="1.5"
@@ -31,19 +31,19 @@
       />
       <!-- Freehand polygon indicator -->
       <polyline
-        v-if="store.activeTool === 'freehand' && freehandTool.value?.svgPoints?.value?.length > 0"
-        :points="freehandTool.value.svgPoints.value.map(p => `${p.x},${p.y}`).join(' ')"
+        v-if="store.activeTool === 'freehand' && freehandTool?.svgPoints?.value?.length > 0"
+        :points="freehandTool.svgPoints.value.map(p => `${p.x},${p.y}`).join(' ')"
         fill="none"
         stroke="#ffd700"
         stroke-width="1.5"
       />
       <!-- Fixed rectangle indicator -->
       <rect
-        v-if="store.activeTool === 'fixed' && fixedTool.value?.hasRect?.value"
-        :x="Math.min(fixedTool.value.svgRect.x1, fixedTool.value.svgRect.x2)"
-        :y="Math.min(fixedTool.value.svgRect.y1, fixedTool.value.svgRect.y2)"
-        :width="Math.abs(fixedTool.value.svgRect.x2 - fixedTool.value.svgRect.x1)"
-        :height="Math.abs(fixedTool.value.svgRect.y2 - fixedTool.value.svgRect.y1)"
+        v-if="store.activeTool === 'fixed' && fixedTool?.hasRect?.value"
+        :x="Math.min(fixedTool.svgRect.x1, fixedTool.svgRect.x2)"
+        :y="Math.min(fixedTool.svgRect.y1, fixedTool.svgRect.y2)"
+        :width="Math.abs(fixedTool.svgRect.x2 - fixedTool.svgRect.x1)"
+        :height="Math.abs(fixedTool.svgRect.y2 - fixedTool.svgRect.y1)"
         fill="rgba(255,165,0,0.1)"
         stroke="#ffa500"
         stroke-width="1.5"
@@ -51,11 +51,11 @@
       />
       <!-- Fixed rect in-progress drawing (before hasRect) -->
       <rect
-        v-if="store.activeTool === 'fixed' && fixedTool.value?.isDrawing?.value"
-        :x="Math.min(fixedTool.value?.svgRect?.x1 ?? 0, fixedTool.value?.svgRect?.x2 ?? 0)"
-        :y="Math.min(fixedTool.value?.svgRect?.y1 ?? 0, fixedTool.value?.svgRect?.y2 ?? 0)"
-        :width="Math.abs((fixedTool.value?.svgRect?.x2 ?? 0) - (fixedTool.value?.svgRect?.x1 ?? 0))"
-        :height="Math.abs((fixedTool.value?.svgRect?.y2 ?? 0) - (fixedTool.value?.svgRect?.y1 ?? 0))"
+        v-if="store.activeTool === 'fixed' && fixedTool?.isDrawing?.value"
+        :x="Math.min(fixedTool?.svgRect?.x1 ?? 0, fixedTool?.svgRect?.x2 ?? 0)"
+        :y="Math.min(fixedTool?.svgRect?.y1 ?? 0, fixedTool?.svgRect?.y2 ?? 0)"
+        :width="Math.abs((fixedTool?.svgRect?.x2 ?? 0) - (fixedTool?.svgRect?.x1 ?? 0))"
+        :height="Math.abs((fixedTool?.svgRect?.y2 ?? 0) - (fixedTool?.svgRect?.y1 ?? 0))"
         fill="rgba(255,165,0,0.05)"
         stroke="#ffa50080"
         stroke-width="1"
