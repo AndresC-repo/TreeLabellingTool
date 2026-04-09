@@ -4,3 +4,4 @@ laspy[lazrs]==2.5.4
 numpy==1.26.4
 python-multipart==0.0.9
 aiofiles==23.2.1
+Pillow==10.3.0

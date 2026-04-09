@@ -10,6 +10,7 @@ from services.projection import (
     build_2d_buffer,
     CLASSIFICATION_COLORS,
 )
+from services.renderer2d import render_top_view
 from config import DEFAULT_MAX_POINTS
 
 router = APIRouter(prefix="/api/v1/view", tags=["view"])
@@ -69,6 +70,38 @@ def get_2d_points(
             "X-Point-Count": str(actual_count),
             "X-Decimation-Ratio": f"{ratio:.4f}",
             "Access-Control-Expose-Headers": "X-Point-Count, X-Decimation-Ratio",
+        },
+    )
+
+
+@router.get("/{session_id}/image")
+def get_2d_image(
+    session_id: str,
+    scalar_field: str = "classification",
+    width: int = Query(2048, ge=256, le=4096),
+    height: int = Query(2048, ge=256, le=4096),
+):
+    las_path = get_las_path(session_id)
+    if not las_path.exists():
+        raise HTTPException(404, "Session not found")
+    if scalar_field not in VALID_SCALAR_FIELDS:
+        raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
+
+    png_bytes, meta = render_top_view(session_id, las_path, scalar_field, width, height)
+    b = meta["bounds"]
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={
+            "X-Point-Count": str(meta["point_count"]),
+            "X-Decimation-Ratio": f"{meta['decimation_ratio']:.4f}",
+            "X-Bounds-XMin": str(b["xmin"]),
+            "X-Bounds-XMax": str(b["xmax"]),
+            "X-Bounds-YMin": str(b["ymin"]),
+            "X-Bounds-YMax": str(b["ymax"]),
+            "X-Image-Width": str(meta["image_width"]),
+            "X-Image-Height": str(meta["image_height"]),
+            "Access-Control-Expose-Headers": "X-Point-Count,X-Decimation-Ratio,X-Bounds-XMin,X-Bounds-XMax,X-Bounds-YMin,X-Bounds-YMax,X-Image-Width,X-Image-Height",
         },
     )
 

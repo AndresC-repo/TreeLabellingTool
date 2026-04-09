@@ -19,6 +19,12 @@ export const get2DPoints = (sessionId, scalarField = 'classification', maxPoints
     responseType: 'arraybuffer',
   })
 
+export const get2DImage = (sessionId, scalarField = 'classification', width = 2048, height = 2048) =>
+  api.get(`/view/${sessionId}/image`, {
+    params: { scalar_field: scalarField, width, height },
+    responseType: 'blob',
+  })
+
 export const extractPatch = (sessionId, payload) =>
   api.post(`/patches/${sessionId}/extract`, payload)
 
