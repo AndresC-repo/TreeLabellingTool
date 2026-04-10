@@ -2,8 +2,8 @@
   <div class="save-panel">
     <h3>Save</h3>
     <input v-model="filename" placeholder="output.las" />
-    <button @click="save" :disabled="saving" class="save-btn">
-      {{ saving ? 'Saving...' : 'Save as .las' }}
+    <button @click="save" :disabled="saving" class="save-btn" title="Save [Ctrl+S]">
+      {{ saving ? 'Saving...' : 'Save as .las' }} <kbd>Ctrl+S</kbd>
     </button>
     <div v-if="downloadUrl" class="download-row">
       <a :href="downloadUrl" download>⬇ Download labeled .las</a>
@@ -40,6 +40,8 @@ const filename = ref(suggestedFilename.value)
 // Update whenever labels are added or patch number is set
 watch(suggestedFilename, v => { filename.value = v })
 
+defineExpose({ save })
+
 async function save() {
   saving.value = true
   error.value = null
@@ -74,4 +76,10 @@ input {
 .download-row { margin-top: 12px; text-align: center; }
 a { color: #7af; font-size: 14px; }
 .error { color: #f66; margin-top: 8px; font-size: 12px; }
+kbd {
+  display: inline-block; font-size: 9px; font-family: monospace;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 3px; padding: 0 3px; margin-left: 4px;
+  line-height: 1.6; color: #9b9; vertical-align: middle;
+}
 </style>

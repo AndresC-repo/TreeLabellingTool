@@ -8,31 +8,71 @@
     <div class="main">
       <CanvasRenderer3D ref="renderer3d" class="canvas" />
       <aside class="side-panel">
-        <LabelPanel />
-        <SavePanel />
+        <LabelPanel ref="labelPanel" />
+        <PatchLegend v-if="store.viewMode === 'classification'" />
+        <SavePanel ref="savePanel" />
       </aside>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, onBeforeUnmount, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { ref } from 'vue'
 import { usePatch3DStore } from '../stores/patch3d.js'
 import CanvasRenderer3D from '../components/patch3d/CanvasRenderer3D.vue'
 import LabelPanel from '../components/patch3d/LabelPanel.vue'
+import PatchLegend from '../components/patch3d/PatchLegend.vue'
 import SavePanel from '../components/patch3d/SavePanel.vue'
 
 const route = useRoute()
 const store = usePatch3DStore()
 const renderer3d = ref(null)
+const labelPanel = ref(null)
+const savePanel = ref(null)
+
+function onKeyDown(e) {
+  // Ignore shortcuts when typing in an input/textarea
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+
+  switch (e.key) {
+    case 'r':
+    case 'R':
+      renderer3d.value?.setRotate(true)
+      break
+    case 's':
+    case 'S':
+      if (!e.ctrlKey && !e.metaKey) renderer3d.value?.setRotate(false)
+      break
+    case 'v':
+    case 'V':
+      store.viewMode = store.viewMode === 'elevation' ? 'classification' : 'elevation'
+      break
+    case 'Enter':
+      e.preventDefault()
+      labelPanel.value?.applyLabel()
+      break
+    case 'g':
+    case 'G':
+      labelPanel.value?.applyGnd()
+      break
+  }
+  // Ctrl+S / Cmd+S — must check after switch to avoid conflict with plain 'S'
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault()
+    savePanel.value?.save()
+  }
+}
 
 onMounted(() => {
   store.patchNumber = parseInt(route.query.n) || 1
+  document.addEventListener('keydown', onKeyDown)
 })
 
-onBeforeUnmount(() => store.reset())
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeyDown)
+  store.reset()
+})
 </script>
 
 <style scoped>

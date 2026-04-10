@@ -14,15 +14,17 @@
       class="apply-btn"
       :disabled="store.selectedIndices.length === 0 || applying"
       @click="applyLabel"
+      title="Apply label [Enter]"
     >
-      {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }}
+      {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }} <kbd>↵</kbd>
     </button>
     <button
       class="gnd-btn"
       :disabled="store.selectedIndices.length === 0 || applying"
       @click="applyGnd"
+      title="Label as ground (0) [G]"
     >
-      Label GND (0)
+      Label GND (0) <kbd>G</kbd>
     </button>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
   </div>
@@ -44,6 +46,8 @@ watch(() => store.nextLabel, v => { labelValue.value = v })
 
 function increment() { labelValue.value++ }
 function decrement() { labelValue.value = Math.max(0, labelValue.value - 1) }
+
+defineExpose({ applyLabel, applyGnd })
 
 async function applyGnd() {
   if (store.selectedIndices.length === 0) return
@@ -125,4 +129,10 @@ input::-webkit-inner-spin-button { opacity: 0.5; }
 .gnd-btn:disabled { opacity: 0.4; cursor: default; }
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
+kbd {
+  display: inline-block; font-size: 9px; font-family: monospace;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 3px; padding: 0 3px; margin-left: 4px;
+  line-height: 1.6; color: #99b; vertical-align: middle;
+}
 </style>

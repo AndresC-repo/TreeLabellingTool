@@ -59,7 +59,11 @@ def get_patch_points(session_id: str, patch_id: str):
     x = np.array(las.x, dtype=np.float32)
     y = np.array(las.y, dtype=np.float32)
     z = np.array(las.z, dtype=np.float32)
-    classification = np.array(las.classification)
+    # Use full int32 label dim if present (supports values > 255)
+    if "label" in las.point_format.extra_dimension_names:
+        classification = np.array(las.label, dtype=np.int32)
+    else:
+        classification = np.array(las.classification, dtype=np.int32)
     rgb = elevation_to_rgb(z).astype(np.float32)
 
     # Binary layout: [x, y, z, r, g, b, classification] — 7 float32 per point
@@ -99,6 +103,27 @@ def next_label(session_id: str, patch_id: str):
     if lm.get_labels(patch_id) is None:
         raise HTTPException(404, "Patch label state not found")
     return {"next_label": lm.get_next_label(patch_id)}
+
+
+@router.get("/{session_id}/{patch_id}/colormap")
+def get_patch_colormap(session_id: str, patch_id: str):
+    """Return label color map for the current in-memory label state of a patch."""
+    from services.projection import get_classification_color
+    labels = lm.get_labels(patch_id)
+    if labels is None:
+        raise HTTPException(404, "Patch label state not found")
+    unique, counts = np.unique(labels, return_counts=True)
+    entries = []
+    for code, count in zip(unique.tolist(), counts.tolist()):
+        r, g, b = get_classification_color(int(code))
+        entries.append({
+            "value": int(code),
+            "color": "#{:02x}{:02x}{:02x}".format(
+                round(r * 255), round(g * 255), round(b * 255)
+            ),
+            "count": int(count),
+        })
+    return {"entries": entries}
 
 
 @router.post("/{session_id}/{patch_id}/save", response_model=SaveResponse)

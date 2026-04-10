@@ -37,6 +37,7 @@ def extract_patch(
 
     x_all, y_all, z_all = [], [], []
     class_all, int_all, ret_all = [], [], []
+    label_all = []
 
     # Pre-compute polygon bbox for polygon selections (avoid recomputing per chunk)
     poly_bbox = None
@@ -51,7 +52,10 @@ def extract_patch(
 
     with laspy.open(las_path) as f:
         src_header = f.header
+        has_label_dim = None  # detected from first chunk
         for chunk in f.chunk_iterator(DECIMATION_CHUNK_SIZE):
+            if has_label_dim is None:
+                has_label_dim = hasattr(chunk, "label")
             cx = np.asarray(chunk.x, dtype=np.float64)
             cy = np.asarray(chunk.y, dtype=np.float64)
 
@@ -85,6 +89,8 @@ def extract_patch(
             class_all.append(np.asarray(chunk.classification)[mask])
             int_all.append(np.asarray(chunk.intensity)[mask])
             ret_all.append(np.asarray(chunk.number_of_returns)[mask])
+            if has_label_dim:
+                label_all.append(np.asarray(chunk.label)[mask])
 
     if not x_all:
         return {
@@ -99,6 +105,8 @@ def extract_patch(
     classification = np.concatenate(class_all)
     intensity = np.concatenate(int_all)
     returns = np.concatenate(ret_all)
+    # Use full int32 labels if available (supports values > 255)
+    full_labels = np.concatenate(label_all).astype(np.int32) if label_all else classification.astype(np.int32)
 
     # Write patch .las using same point format as source
     new_las = laspy.LasData(
@@ -123,5 +131,5 @@ def extract_patch(
             "y": [float(y.min()), float(y.max())],
             "z": [float(z.min()), float(z.max())],
         },
-        "classification": classification,
+        "classification": full_labels,  # int32, full range (from label dim or uint8 classification)
     }

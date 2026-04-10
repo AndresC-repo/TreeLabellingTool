@@ -45,3 +45,6 @@ export const getDownloadUrl = (sessionId, patchId) =>
 
 export const getColormap = (sessionId, scalarField = 'classification') =>
   api.get(`/view/${sessionId}/colormap`, { params: { scalar_field: scalarField } })
+
+export const getPatchColormap = (sessionId, patchId) =>
+  api.get(`/patches/${sessionId}/${patchId}/colormap`)

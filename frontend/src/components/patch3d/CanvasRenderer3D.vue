@@ -12,12 +12,12 @@
     />
     <div class="toolbar-overlay">
       <div class="btn-group">
-        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view">&#8635; Rotate</button>
-        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection">&#9684; Select</button>
+        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view [R]">&#8635; Rotate <kbd>R</kbd></button>
+        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [S]">&#9684; Select <kbd>S</kbd></button>
       </div>
       <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'">Elevation</button>
-        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'">Classification</button>
+        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Classification view [V]">Classification</button>
       </div>
       <div class="btn-group">
         <button @click="setTopView" title="Top view (Z down)">&#9651; Top</button>
@@ -209,7 +209,7 @@ onBeforeUnmount(() => {
   dispose()
 })
 
-defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer })
+defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate })
 </script>
 
 <style scoped>
@@ -230,6 +230,12 @@ defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, cam
 }
 .toolbar-overlay button.active { background: #3a5a8e; color: #fff; border-color: #7ab3ff; }
 .toolbar-overlay button:hover:not(.active) { background: #344; color: #eee; }
+.toolbar-overlay kbd {
+  display: inline-block; font-size: 9px; font-family: monospace;
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 3px; padding: 0 3px; margin-left: 3px;
+  line-height: 1.6; color: #aac; vertical-align: middle;
+}
 
 .axis-triad {
   position: absolute; bottom: 16px; left: 16px;
