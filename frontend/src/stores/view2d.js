@@ -22,6 +22,11 @@ export const useView2DStore = defineStore('view2d', () => {
     activeSelection.value = null
   }
 
+  function reset() {
+    labeledRegions.value = []
+    activeSelection.value = null
+  }
+
   return {
     scalarField,
     activeTool,
@@ -30,5 +35,6 @@ export const useView2DStore = defineStore('view2d', () => {
     addRegion,
     removeRegion,
     clearActiveSelection,
+    reset,
   }
 })

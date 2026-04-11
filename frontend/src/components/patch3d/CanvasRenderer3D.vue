@@ -12,16 +12,16 @@
     />
     <div class="toolbar-overlay">
       <div class="btn-group">
-        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view [R]">&#8635; Rotate <kbd>R</kbd></button>
-        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [S]">&#9684; Select <kbd>S</kbd></button>
+        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view [R]">&#8635; Rotate</button>
+        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; Select <kbd>R</kbd></button>
       </div>
       <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
-        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Classification view [V]">Classification</button>
+        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation</button>
+        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Classification view [V]">Classification <kbd>V</kbd></button>
       </div>
       <div class="btn-group">
-        <button @click="setTopView" title="Top view (Z down)">&#9651; Top</button>
-        <button @click="setSideView" title="Side view">&#9654; Side</button>
+        <button @click="setTopView" title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
+        <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
       </div>
     </div>
     <!-- Corner axis triad -->
@@ -59,9 +59,13 @@ let axisAnimId = null
 const rotateMode = ref(true)
 let cloudCenter = null
 let cloudSpan = 1
+let lastView = null   // 'top' | 'side'
+let sideSign = -1     // -1 = front face, +1 = back face
 
 function setTopView() {
   if (!cloudCenter || !controls || !camera.value) return
+  lastView = 'top'
+  sideSign = -1       // reset side orientation when leaving side view
   const { x, y, z } = cloudCenter
   camera.value.position.set(x, y, z + cloudSpan * 2)
   camera.value.up.set(0, 1, 0)
@@ -72,8 +76,11 @@ function setTopView() {
 
 function setSideView() {
   if (!cloudCenter || !controls || !camera.value) return
+  if (lastView === 'side') sideSign *= -1   // flip 180° on repeated press
+  else sideSign = -1
+  lastView = 'side'
   const { x, y, z } = cloudCenter
-  camera.value.position.set(x, y - cloudSpan * 2, z)
+  camera.value.position.set(x, y + sideSign * cloudSpan * 2, z)
   camera.value.up.set(0, 0, 1)
   camera.value.lookAt(x, y, z)
   controls.target.set(x, y, z)
@@ -136,6 +143,10 @@ function setRotate(val) {
   rotateMode.value = val
   if (controls) controls.enabled = val
   if (val) lasso.cancelLasso()
+}
+
+function toggleRotate() {
+  setRotate(!rotateMode.value)
 }
 
 // React to store viewMode changes (from view buttons or from LabelPanel)
@@ -209,7 +220,7 @@ onBeforeUnmount(() => {
   dispose()
 })
 
-defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate })
+defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView })
 </script>
 
 <style scoped>

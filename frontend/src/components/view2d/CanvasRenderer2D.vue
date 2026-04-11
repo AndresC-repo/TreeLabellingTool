@@ -84,7 +84,7 @@ const extractError = ref(null)
 // Image state
 let currentImage = null
 let IMG_W = 2048, IMG_H = 2048
-const pointSize = ref(3)
+const pointSize = ref(4)
 const bounds = reactive({ xmin: 0, xmax: 1, ymin: 0, ymax: 1 })
 const pan = reactive({ offsetX: 0, offsetY: 0, scale: 1 })
 

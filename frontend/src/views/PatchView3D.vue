@@ -35,14 +35,25 @@ function onKeyDown(e) {
   // Ignore shortcuts when typing in an input/textarea
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
 
+  // Ctrl+S / Cmd+S — check before switch so plain 'S' still works
+  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    e.preventDefault()
+    savePanel.value?.save()
+    return
+  }
+
   switch (e.key) {
     case 'r':
     case 'R':
-      renderer3d.value?.setRotate(true)
+      renderer3d.value?.toggleRotate()
       break
     case 's':
     case 'S':
-      if (!e.ctrlKey && !e.metaKey) renderer3d.value?.setRotate(false)
+      renderer3d.value?.setSideView()
+      break
+    case 't':
+    case 'T':
+      renderer3d.value?.setTopView()
       break
     case 'v':
     case 'V':
@@ -56,11 +67,6 @@ function onKeyDown(e) {
     case 'G':
       labelPanel.value?.applyGnd()
       break
-  }
-  // Ctrl+S / Cmd+S — must check after switch to avoid conflict with plain 'S'
-  if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-    e.preventDefault()
-    savePanel.value?.save()
   }
 }
 
