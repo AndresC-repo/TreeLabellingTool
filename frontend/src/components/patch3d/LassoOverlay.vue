@@ -49,7 +49,7 @@ function redraw() {
   const pts = props.lassoPoints
   if (!pts || pts.length === 0) return
 
-  ctx.strokeStyle = '#ff00ff'
+  ctx.strokeStyle = '#00ff44'
   ctx.lineWidth = 2
 
   // Filled polygon (confirmed vertices)
@@ -57,14 +57,14 @@ function redraw() {
   ctx.moveTo(pts[0].x, pts[0].y)
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
   if (pts.length > 2) {
-    ctx.fillStyle = 'rgba(255, 0, 255, 0.08)'
+    ctx.fillStyle = 'rgba(0, 255, 68, 0.08)'
     ctx.fill()
   }
   ctx.setLineDash([])
   ctx.stroke()
 
   // Draw vertex dots
-  ctx.fillStyle = '#ff00ff'
+  ctx.fillStyle = '#00ff44'
   for (const p of pts) {
     ctx.beginPath()
     ctx.arc(p.x, p.y, 3, 0, Math.PI * 2)
@@ -78,7 +78,7 @@ function redraw() {
     ctx.moveTo(last.x, last.y)
     ctx.lineTo(previewPoint.value.x, previewPoint.value.y)
     ctx.setLineDash([4, 4])
-    ctx.strokeStyle = 'rgba(255,0,255,0.5)'
+    ctx.strokeStyle = 'rgba(0, 255, 68, 0.5)'
     ctx.stroke()
     ctx.setLineDash([])
   }
