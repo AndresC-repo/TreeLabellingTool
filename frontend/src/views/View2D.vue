@@ -49,6 +49,7 @@
         >
           <button class="remove-btn" @click.stop="store.removeRegion(region.patch_id)" title="Remove region">&#x2715;</button>
           <span class="patch-id">patch_{{ region.patch_number }}</span>
+          <span v-if="store.labelledPatchIds.has(region.patch_id)" class="labelled-badge" title="Labelled">C</span>
           <span class="patch-pts">{{ region.point_count.toLocaleString() }} pts</span>
         </div>
       </aside>
@@ -57,7 +58,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
@@ -130,8 +131,6 @@ function removeSession(id) {
 function openPatch(region) {
   router.push(`/session/${route.params.id}/patch/${region.patch_id}?n=${region.patch_number}`)
 }
-
-onBeforeUnmount(() => store.reset())
 </script>
 
 <style scoped>
@@ -244,5 +243,6 @@ h3 { color: #adf; font-size: 13px; font-weight: 600; margin-bottom: 12px; text-t
 }
 .remove-btn:hover { color: #f66; }
 .patch-id { color: #aac; font-family: monospace; flex: 1; padding: 0 6px; }
+.labelled-badge { color: #4f4; font-size: 10px; font-weight: 700; margin-right: 4px; flex-shrink: 0; }
 .patch-pts { color: #778; }
 </style>

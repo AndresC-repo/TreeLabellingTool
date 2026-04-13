@@ -9,6 +9,8 @@ export const useView2DStore = defineStore('view2d', () => {
   const labeledRegions = ref([])
   // Current active selection (for SVG overlay rendering)
   const activeSelection = shallowRef(null)
+  // Set of patch_ids that have had at least one label applied
+  const labelledPatchIds = ref(new Set())
 
   function addRegion(region) {
     labeledRegions.value.push(region)
@@ -18,6 +20,12 @@ export const useView2DStore = defineStore('view2d', () => {
     labeledRegions.value = labeledRegions.value.filter(r => r.patch_id !== patchId)
   }
 
+  function markLabelled(patchId) {
+    if (!labelledPatchIds.value.has(patchId)) {
+      labelledPatchIds.value = new Set([...labelledPatchIds.value, patchId])
+    }
+  }
+
   function clearActiveSelection() {
     activeSelection.value = null
   }
@@ -25,6 +33,7 @@ export const useView2DStore = defineStore('view2d', () => {
   function reset() {
     labeledRegions.value = []
     activeSelection.value = null
+    labelledPatchIds.value = new Set()
   }
 
   return {
@@ -32,8 +41,10 @@ export const useView2DStore = defineStore('view2d', () => {
     activeTool,
     labeledRegions,
     activeSelection,
+    labelledPatchIds,
     addRegion,
     removeRegion,
+    markLabelled,
     clearActiveSelection,
     reset,
   }

@@ -33,10 +33,12 @@
 <script setup>
 import { ref, watch } from 'vue'
 import { usePatch3DStore } from '../../stores/patch3d.js'
+import { useView2DStore } from '../../stores/view2d.js'
 import { labelPoints, getNextLabel } from '../../api/client.js'
 import { useRoute } from 'vue-router'
 
 const store = usePatch3DStore()
+const view2d = useView2DStore()
 const route = useRoute()
 const labelValue = ref(store.nextLabel)
 const applying = ref(false)
@@ -59,6 +61,7 @@ async function applyGnd() {
     })
     store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: 0 }
     store.viewMode = 'classification'
+    view2d.markLabelled(route.params.patchId)
     // 0 is intentionally not added to appliedLabels (excluded from filename)
     store.selectedIndices = []
   } catch (err) {
@@ -80,6 +83,7 @@ async function applyLabel() {
     store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: labelValue.value }
     store.viewMode = 'classification'
     store.addAppliedLabel(labelValue.value)
+    view2d.markLabelled(route.params.patchId)
     const res = await getNextLabel(route.params.id, route.params.patchId)
     store.nextLabel = res.data.next_label
     store.selectedIndices = []
