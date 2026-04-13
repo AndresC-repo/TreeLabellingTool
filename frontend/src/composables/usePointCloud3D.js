@@ -36,20 +36,144 @@ function paletteColor(labelValue) {
   return hslToRgb(hue, 0.85, 0.55)
 }
 
+// ── DTM color computation ─────────────────────────────────────────────────────
+// Only ground-classified (class 2) points are shown, colored by their own Z.
+// All other points are hidden (painted background color).
+function computeDTMColors(positions, classifications, count) {
+  // Collect ground point Z values for normalization
+  let zMin = Infinity, zMax = -Infinity
+  for (let i = 0; i < count; i++) {
+    if (Math.round(classifications[i]) !== 2) continue
+    const z = positions[i*3+2]
+    if (z < zMin) zMin = z
+    if (z > zMax) zMax = z
+  }
+  const zRange = Math.max(zMax - zMin, 1e-6)
+
+  const colors = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    if (Math.round(classifications[i]) !== 2) {
+      // Hide non-ground points — match scene background
+      colors[i*3] = 0.1; colors[i*3+1] = 0.1; colors[i*3+2] = 0.18
+      continue
+    }
+    const t = (positions[i*3+2] - zMin) / zRange
+    colors[i*3]   = t < 1/3 ? 0          : t < 2/3 ? (t - 1/3) * 3 : 1
+    colors[i*3+1] = t < 1/3 ? t * 3      : t < 2/3 ? 1             : 1 - (t - 2/3) * 3
+    colors[i*3+2] = t < 1/3 ? 1 - t * 3 : 0
+  }
+  return colors
+}
+
+// ── CHM color computation ─────────────────────────────────────────────────────
+// Each point is colored by (Z − ground Z at its XY location).
+// Ground = classification 2. Falls back to global min Z if no ground exists.
+function computeCHMColors(positions, classifications, count) {
+  const GRID   = 64
+  const COARSE = 16
+  let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
+  for (let i = 0; i < count; i++) {
+    const x = positions[i*3], y = positions[i*3+1]
+    if (x < xMin) xMin = x; if (x > xMax) xMax = x
+    if (y < yMin) yMin = y; if (y > yMax) yMax = y
+  }
+  const xRange = Math.max(xMax - xMin, 1e-6)
+  const yRange = Math.max(yMax - yMin, 1e-6)
+
+  // Fine DTM: min ground Z per cell
+  const minGnd = new Float32Array(GRID * GRID).fill(Infinity)
+  let globalGnd = Infinity
+  for (let i = 0; i < count; i++) {
+    if (Math.round(classifications[i]) !== 2) continue
+    const z = positions[i*3+2]
+    if (z < globalGnd) globalGnd = z
+    const gx = Math.min((((positions[i*3]   - xMin) / xRange) * GRID) | 0, GRID - 1)
+    const gy = Math.min((((positions[i*3+1] - yMin) / yRange) * GRID) | 0, GRID - 1)
+    const idx = gy * GRID + gx
+    if (z < minGnd[idx]) minGnd[idx] = z
+  }
+  if (globalGnd === Infinity) globalGnd = 0  // no ground points at all
+
+  // Coarse DTM for gap-filling
+  const coarseGnd = new Float32Array(COARSE * COARSE).fill(Infinity)
+  for (let i = 0; i < count; i++) {
+    if (Math.round(classifications[i]) !== 2) continue
+    const z  = positions[i*3+2]
+    const cx = Math.min((((positions[i*3]   - xMin) / xRange) * COARSE) | 0, COARSE - 1)
+    const cy = Math.min((((positions[i*3+1] - yMin) / yRange) * COARSE) | 0, COARSE - 1)
+    const idx = cy * COARSE + cx
+    if (z < coarseGnd[idx]) coarseGnd[idx] = z
+  }
+  for (let i = 0; i < COARSE * COARSE; i++) {
+    if (coarseGnd[i] === Infinity) coarseGnd[i] = globalGnd
+  }
+
+  // Merged ground grid: fine where available, coarse fallback elsewhere
+  const groundZ = new Float32Array(GRID * GRID)
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      const fine = minGnd[gy * GRID + gx]
+      if (fine !== Infinity) {
+        groundZ[gy * GRID + gx] = fine
+      } else {
+        const cy = Math.min((gy / GRID * COARSE) | 0, COARSE - 1)
+        const cx = Math.min((gx / GRID * COARSE) | 0, COARSE - 1)
+        groundZ[gy * GRID + gx] = coarseGnd[cy * COARSE + cx]
+      }
+    }
+  }
+
+  // Height above ground per point
+  const heights = new Float32Array(count)
+  let maxH = 0
+  for (let i = 0; i < count; i++) {
+    const gx = Math.min((((positions[i*3]   - xMin) / xRange) * GRID) | 0, GRID - 1)
+    const gy = Math.min((((positions[i*3+1] - yMin) / yRange) * GRID) | 0, GRID - 1)
+    const h  = Math.max(positions[i*3+2] - groundZ[gy * GRID + gx], 0)
+    heights[i] = h
+    if (h > maxH) maxH = h
+  }
+  if (maxH < 1e-6) maxH = 1
+
+  // Color: dark green at 0 → bright yellow-green at max height
+  // Ground points (class 2) are hidden by painting them with the background color.
+  const colors = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    if (Math.round(classifications[i]) === 2) {
+      // Hide ground points — match scene background
+      colors[i*3] = 0.1; colors[i*3+1] = 0.1; colors[i*3+2] = 0.18
+      continue
+    }
+    const t = heights[i] / maxH
+    colors[i*3]   = t * 0.75           // R: 0 → 0.75
+    colors[i*3+1] = 0.25 + t * 0.75   // G: 0.25 → 1.0
+    colors[i*3+2] = 0                  // B: always 0
+  }
+  return colors
+}
+
+// ── Main composable ───────────────────────────────────────────────────────────
+
 export function usePointCloud3D(scene, sessionId, patchId) {
   const loading = ref(false)
   const pointCount = ref(0)
   let pointsMesh = null
   let elevationColors = null      // original server colors (elevation), never modified
   let classificationColors = null // per-point label colors (gray default → palette on label)
+  let dtmColors = null            // min-Z in local cell, elevation gradient
+  let chmColors = null            // height above ground, green gradient
+  let filteredElevationColors = null  // elevation colors with Z filter applied
   let cachedPositions = null
+  let cachedClassifications = null
+  let _zMin = 0, _zMax = 0       // Z bounds for filter
+  let _filterLo = -Infinity, _filterHi = Infinity  // current filter bounds
   const viewMode = ref('elevation')
 
   async function load() {
     loading.value = true
     try {
       const res = await getPatchPoints(sessionId, patchId)
-      const { positions, colors, count } = parse3DBuffer(res.data)
+      const { positions, colors, classifications, count } = parse3DBuffer(res.data)
       pointCount.value = count
       elevationColors = colors.slice()
 
@@ -58,7 +182,23 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       for (let i = 0; i < count * 3; i += 3) {
         classificationColors[i] = 0.28; classificationColors[i+1] = 0.28; classificationColors[i+2] = 0.32
       }
+
+      // DTM and CHM computed from positions + classifications
+      dtmColors = computeDTMColors(positions, classifications, count)
+      chmColors = computeCHMColors(positions, classifications, count)
+
       cachedPositions = positions
+      cachedClassifications = classifications
+
+      // Compute Z bounds from all points
+      _zMin = Infinity; _zMax = -Infinity
+      for (let i = 0; i < count; i++) {
+        const z = positions[i*3+2]
+        if (z < _zMin) _zMin = z
+        if (z > _zMax) _zMax = z
+      }
+      _filterLo = _zMin; _filterHi = _zMax
+      filteredElevationColors = null  // no filter yet
 
       if (pointsMesh) { scene.value.remove(pointsMesh); pointsMesh.geometry.dispose(); pointsMesh.material.dispose() }
 
@@ -72,12 +212,45 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       geo.computeBoundingBox()
       const center = new THREE.Vector3()
       geo.boundingBox.getCenter(center)
-      return { center, positions }
+
+      // Collect ground point indices (class 2) for Label GND+ feature
+      const groundIndices = []
+      for (let i = 0; i < count; i++) {
+        if (Math.round(classifications[i]) === 2) groundIndices.push(i)
+      }
+
+      return { center, positions, zMin: _zMin, zMax: _zMax, groundIndices }
     } finally { loading.value = false }
   }
 
   function _activeColors() {
-    return viewMode.value === 'classification' ? classificationColors : elevationColors
+    if (viewMode.value === 'classification') return classificationColors
+    if (viewMode.value === 'dtm')            return dtmColors
+    if (viewMode.value === 'chm')            return chmColors
+    // elevation mode — return filtered version if a filter is active
+    return filteredElevationColors ?? elevationColors
+  }
+
+  function setElevationFilter(zLo, zHi) {
+    if (!elevationColors || !cachedPositions) return
+    _filterLo = zLo; _filterHi = zHi
+    const count = pointCount.value
+    const BG = [0.1, 0.1, 0.18]
+    if (zLo <= _zMin && zHi >= _zMax) {
+      // No filtering needed — reset to original
+      filteredElevationColors = null
+    } else {
+      filteredElevationColors = elevationColors.slice()
+      for (let i = 0; i < count; i++) {
+        const z = cachedPositions[i*3+2]
+        if (z < zLo || z > zHi) {
+          filteredElevationColors[i*3] = BG[0]
+          filteredElevationColors[i*3+1] = BG[1]
+          filteredElevationColors[i*3+2] = BG[2]
+        }
+      }
+    }
+    if (viewMode.value === 'elevation') _applyToMesh(_activeColors())
   }
 
   function _applyToMesh(src) {
@@ -95,9 +268,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function highlightIndices(indices) {
     if (!pointsMesh) return
     const attr = pointsMesh.geometry.getAttribute('color')
-    // Start from current view
     attr.array.set(_activeColors())
-    // Highlight selected in bright white
     for (const i of indices) {
       attr.array[i*3] = 1; attr.array[i*3+1] = 1; attr.array[i*3+2] = 1
     }
@@ -106,11 +277,9 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function applyLabelColor(indices, labelValue) {
     const [r, g, b] = paletteColor(labelValue)
-    // Update classification color buffer
     for (const i of indices) {
       classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b
     }
-    // Switch to classification view automatically
     viewMode.value = 'classification'
     _applyToMesh(classificationColors)
   }
@@ -130,5 +299,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     }
   }
 
-  return { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, viewMode, getPositions, dispose }
+  function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
+
+  return { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
 }

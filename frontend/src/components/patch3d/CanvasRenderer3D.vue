@@ -16,14 +16,29 @@
         <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; Select <kbd>R</kbd></button>
       </div>
       <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation</button>
-        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Classification view [V]">Classification <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'elevation' }"      @click="store.viewMode = 'elevation'"      title="Elevation view [V]">Elevation <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'dtm' }"            @click="store.viewMode = 'dtm'"            title="DTM — terrain min Z per cell [V]">DTM <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'chm' }"            @click="store.viewMode = 'chm'"            title="CHM — height above ground [V]">CHM <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
       </div>
       <div class="btn-group">
         <button @click="setTopView" title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
         <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
       </div>
     </div>
+    <!-- Elevation Z filter slider (only in elevation view) -->
+    <ElevationFilter
+      v-if="store.viewMode === 'elevation'"
+      :zMin="store.zBoundsMin"
+      :zMax="store.zBoundsMax"
+      :modelValueLo="store.elevFilterMin"
+      :modelValueHi="store.elevFilterMax"
+      :labelValue="store.nextLabel"
+      @update:modelValueLo="store.elevFilterMin = $event"
+      @update:modelValueHi="store.elevFilterMax = $event"
+      @label-inside="onLabelInside"
+      @gnd-below="onGndBelow"
+    />
     <!-- Corner axis triad -->
     <canvas ref="axisCanvas" class="axis-triad"></canvas>
   </div>
@@ -36,18 +51,22 @@ import { TrackballControls } from 'three/addons/controls/TrackballControls.js'
 import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud3D } from '../../composables/usePointCloud3D.js'
 import { usePatch3DStore } from '../../stores/patch3d.js'
+import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
+import { labelPoints, getNextLabel } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
+import ElevationFilter from './ElevationFilter.vue'
 
 const container = ref(null)
 const axisCanvas = ref(null)
 const route = useRoute()
 const store = usePatch3DStore()
+const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, getPositions, dispose } = pc3d
+const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -172,11 +191,67 @@ async function onLassoFinish() {
   }
 }
 
+// ── Elevation filter label actions ────────────────────────────────────────────
+
+async function onGndBelow() {
+  const positions = getPositions()
+  if (!positions) return
+  const zThresh = store.elevFilterMin
+  const count = store.pointCount
+  const indices = []
+  for (let i = 0; i < count; i++) {
+    if (positions[i * 3 + 2] < zThresh) indices.push(i)
+  }
+  if (!indices.length) return
+  try {
+    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: 0 })
+    store.lastApplied = { indices, labelValue: 0 }
+    store.viewMode = 'classification'
+    view2d.markLabelled(route.params.patchId)
+  } catch (err) { console.error('GND below failed:', err) }
+}
+
+async function onLabelInside() {
+  const positions = getPositions()
+  if (!positions) return
+  const zLo = store.elevFilterMin, zHi = store.elevFilterMax
+  const lv = store.nextLabel
+  const count = store.pointCount
+  const indices = []
+  for (let i = 0; i < count; i++) {
+    const z = positions[i * 3 + 2]
+    if (z >= zLo && z <= zHi) indices.push(i)
+  }
+  if (!indices.length) return
+  try {
+    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: lv })
+    store.lastApplied = { indices, labelValue: lv }
+    store.addAppliedLabel(lv)
+    store.viewMode = 'classification'
+    view2d.markLabelled(route.params.patchId)
+    const res = await getNextLabel(route.params.id, route.params.patchId)
+    store.nextLabel = res.data.next_label
+  } catch (err) { console.error('Label inside failed:', err) }
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+// React to elevation filter changes
+watch(() => [store.elevFilterMin, store.elevFilterMax], ([lo, hi]) => {
+  setElevationFilter(lo, hi)
+})
 
 onMounted(async () => {
   const result = await load()
   store.pointCount = pointCount.value
+
+  if (result) {
+    store.groundIndices = result.groundIndices ?? []
+    store.zBoundsMin = result.zMin ?? 0
+    store.zBoundsMax = result.zMax ?? 0
+    store.elevFilterMin = result.zMin ?? 0
+    store.elevFilterMax = result.zMax ?? 0
+  }
 
   if (result?.center && camera.value) {
     const { center, positions } = result

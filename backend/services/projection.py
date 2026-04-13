@@ -87,6 +87,54 @@ def returns_to_rgb(values: np.ndarray) -> np.ndarray:
     return np.stack([norm, 1.0 - norm, np.zeros_like(norm)], axis=1)
 
 
+def dsm_grid_to_rgb(grid: np.ndarray, no_data_mask: np.ndarray) -> np.ndarray:
+    """
+    Colorize a 2D DSM grid (max-Z per pixel) with the elevation gradient.
+    no_data_mask is True where the pixel has no points.
+    Returns uint8 (H, W, 3) image array.
+    """
+    h, w = grid.shape
+    img = np.full((h, w, 3), [26, 26, 46], dtype=np.uint8)
+    valid = ~no_data_mask
+    if not valid.any():
+        return img
+    z_valid = grid[valid]
+    z_min, z_max = float(z_valid.min()), float(z_valid.max())
+    z_range = max(z_max - z_min, 1e-6)
+    t = np.zeros((h, w), dtype=np.float32)
+    t[valid] = (grid[valid] - z_min) / z_range
+    r = np.where(t < 1/3, 0.0, np.where(t < 2/3, (t - 1/3) * 3.0, 1.0)).astype(np.float32)
+    g = np.where(t < 1/3, t * 3.0, np.where(t < 2/3, 1.0, 1.0 - (t - 2/3) * 3.0)).astype(np.float32)
+    b = np.where(t < 1/3, 1.0 - t * 3.0, 0.0).astype(np.float32)
+    rgb_f = np.stack([r, g, b], axis=2)
+    img[valid] = (rgb_f[valid] * 255).clip(0, 255).astype(np.uint8)
+    return img
+
+
+def chm_grid_to_rgb(chm: np.ndarray, no_data_mask: np.ndarray) -> np.ndarray:
+    """
+    Colorize a 2D CHM grid (height above ground per pixel).
+    Uses a dark→bright green gradient.
+    Returns uint8 (H, W, 3) image array.
+    """
+    h, w = chm.shape
+    img = np.full((h, w, 3), [26, 26, 46], dtype=np.uint8)
+    valid = ~no_data_mask
+    if not valid.any():
+        return img
+    chm_max = float(chm[valid].max())
+    chm_max = max(chm_max, 1.0)
+    t = np.zeros((h, w), dtype=np.float32)
+    t[valid] = np.clip(chm[valid] / chm_max, 0.0, 1.0)
+    # Dark green at 0 → bright yellow-green at max
+    r = (t * 0.75).astype(np.float32)
+    g = (0.25 + t * 0.75).astype(np.float32)
+    b = np.zeros((h, w), dtype=np.float32)
+    rgb_f = np.stack([r, g, b], axis=2)
+    img[valid] = (rgb_f[valid] * 255).clip(0, 255).astype(np.uint8)
+    return img
+
+
 def build_2d_buffer(x: np.ndarray, y: np.ndarray, rgb: np.ndarray) -> bytes:
     out = np.empty((len(x), 5), dtype=np.float32)
     out[:, 0] = x

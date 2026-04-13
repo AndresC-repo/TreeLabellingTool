@@ -13,6 +13,15 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const viewMode = ref('elevation')
   const lastApplied = ref(null)   // { indices: number[], labelValue: number }
 
+  // Ground indices (class 2) — for Label GND+ button
+  const groundIndices = ref([])
+
+  // Z bounds of the loaded patch — for elevation filter slider
+  const zBoundsMin = ref(0)
+  const zBoundsMax = ref(0)
+  const elevFilterMin = ref(0)
+  const elevFilterMax = ref(0)
+
   function addAppliedLabel(labelValue) {
     if (labelValue !== 0 && !appliedLabels.value.includes(labelValue)) {
       appliedLabels.value = [...appliedLabels.value, labelValue].sort((a, b) => a - b)
@@ -30,7 +39,17 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     lassoProcessing.value = false
     viewMode.value = 'elevation'
     lastApplied.value = null
+    groundIndices.value = []
+    zBoundsMin.value = 0
+    zBoundsMax.value = 0
+    elevFilterMin.value = 0
+    elevFilterMax.value = 0
   }
 
-  return { patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels, savedUrl, lassoProcessing, viewMode, lastApplied, addAppliedLabel, reset }
+  return {
+    patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
+    savedUrl, lassoProcessing, viewMode, lastApplied,
+    groundIndices, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    addAppliedLabel, reset,
+  }
 })

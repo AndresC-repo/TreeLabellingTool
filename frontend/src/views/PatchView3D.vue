@@ -56,10 +56,18 @@ function onKeyDown(e) {
       renderer3d.value?.setTopView()
       break
     case 'v':
-    case 'V':
-      store.viewMode = store.viewMode === 'elevation' ? 'classification' : 'elevation'
+    case 'V': {
+      const modes = ['elevation', 'dtm', 'chm']
+      const cur = modes.indexOf(store.viewMode)
+      store.viewMode = modes[(cur < 0 ? 0 : cur + 1) % modes.length]
+      break
+    }
+    case 'l':
+    case 'L':
+      store.viewMode = 'classification'
       break
     case 'Enter':
+    case ' ':
       e.preventDefault()
       labelPanel.value?.applyLabel()
       break

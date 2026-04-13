@@ -16,7 +16,7 @@
       @click="applyLabel"
       title="Apply label [Enter]"
     >
-      {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }} <kbd>↵</kbd>
+      {{ applying ? 'Applying...' : `Apply Label ${labelValue}` }} <kbd>↵</kbd> <kbd>Space</kbd>
     </button>
     <button
       class="gnd-btn"
