@@ -51,3 +51,6 @@ export const getPatchColormap = (sessionId, patchId) =>
 
 export const predictPatch = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/predict`)
+
+export const applyLabelsBulk = (sessionId, patchId, labels) =>
+  api.post(`/patches/${sessionId}/${patchId}/apply-labels-bulk`, { labels })

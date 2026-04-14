@@ -56,6 +56,24 @@ def apply_label(patch_id: str, indices: list[int], label_value: int) -> dict:
     }
 
 
+def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
+    """Replace the entire label array with the provided one-per-point labels."""
+    state = _state.get(patch_id)
+    if state is None:
+        raise KeyError(f"Patch {patch_id} not initialized")
+    if len(labels) != len(state["labels"]):
+        raise ValueError(
+            f"Label count mismatch: got {len(labels)}, expected {len(state['labels'])}"
+        )
+    state["labels"] = labels.astype(np.int32)
+    state["used"] = {int(v) for v in np.unique(labels) if v != 0}
+    unique, counts = np.unique(state["labels"], return_counts=True)
+    return {
+        "points_labeled": int(len(labels)),
+        "label_stats": {str(int(u)): int(c) for u, c in zip(unique, counts)},
+    }
+
+
 def get_labels(patch_id: str) -> Optional[np.ndarray]:
     """Return the label array for a patch, or None if not initialized."""
     state = _state.get(patch_id)

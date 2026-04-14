@@ -10,6 +10,7 @@
       <aside class="side-panel">
         <LabelPanel ref="labelPanel" />
         <PatchLegend v-if="store.viewMode === 'classification'" />
+        <InferenceLegend v-if="store.viewMode === 'prediction'" />
         <SavePanel ref="savePanel" />
       </aside>
     </div>
@@ -23,6 +24,7 @@ import { usePatch3DStore } from '../stores/patch3d.js'
 import CanvasRenderer3D from '../components/patch3d/CanvasRenderer3D.vue'
 import LabelPanel from '../components/patch3d/LabelPanel.vue'
 import PatchLegend from '../components/patch3d/PatchLegend.vue'
+import InferenceLegend from '../components/patch3d/InferenceLegend.vue'
 import SavePanel from '../components/patch3d/SavePanel.vue'
 
 const route = useRoute()
@@ -66,8 +68,8 @@ function onKeyDown(e) {
     case 'L':
       store.viewMode = 'classification'
       break
-    case 'p':
-    case 'P':
+    case 'i':
+    case 'I':
       renderer3d.value?.runPrediction()
       break
     case 'Enter':

@@ -12,23 +12,27 @@
     />
     <div class="toolbar-overlay">
       <div class="btn-group">
-        <button :class="{ active: rotateMode }" @click="setRotate(true)" title="Rotate / pan view [R]">&#8635; Rotate</button>
+        <button :class="{ active: rotateMode }"  @click="setRotate(true)"  title="Rotate / pan view">&#8635; Rotate</button>
         <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; Select <kbd>R</kbd></button>
       </div>
       <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'elevation' }"      @click="store.viewMode = 'elevation'"      title="Elevation view [V]">Elevation <kbd>V</kbd></button>
-        <button :class="{ active: store.viewMode === 'dtm' }"            @click="store.viewMode = 'dtm'"            title="DTM — terrain min Z per cell [V]">DTM <kbd>V</kbd></button>
-        <button :class="{ active: store.viewMode === 'chm' }"            @click="store.viewMode = 'chm'"            title="CHM — height above ground [V]">CHM <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
+      </div>
+      <div class="btn-group">
         <button
           :class="{ active: store.viewMode === 'prediction' }"
           :disabled="store.predicting"
           @click="runPrediction"
-          title="Run NN prediction [P]"
-        >{{ store.predicting ? '…' : 'Predict' }} <kbd>P</kbd></button>
-        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
+          title="Run NN inference [I]"
+        >{{ store.predicting ? '…' : 'Inference' }} <kbd>I</kbd></button>
       </div>
       <div class="btn-group">
-        <button @click="setTopView" title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
+        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'dtm' }"       @click="store.viewMode = 'dtm'"       title="DTM — terrain min Z per cell [V]">DTM <kbd>V</kbd></button>
+        <button :class="{ active: store.viewMode === 'chm' }"       @click="store.viewMode = 'chm'"       title="CHM — height above ground [V]">CHM <kbd>V</kbd></button>
+      </div>
+      <div class="btn-group">
+        <button @click="setTopView"  title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
         <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
       </div>
     </div>
@@ -199,15 +203,56 @@ async function onLassoFinish() {
 
 // ── Elevation filter label actions ────────────────────────────────────────────
 
+// Palette colors — mirrors usePointCloud3D.js paletteColor()
+function _paletteHex(labelValue) {
+  let r, g, b
+  if (labelValue === 0) { r = 0.28; g = 0.28; b = 0.32 }
+  else if (labelValue >= 101 && labelValue <= 108) {
+    const P = [[1,0,1],[0,1,1],[1,1,0],[1,.5,0],[.5,0,1],[0,1,.5],[1,0,.5],[.5,1,0]]
+    ;[r, g, b] = P[labelValue - 101]
+  } else {
+    const h = ((labelValue * 137.508) % 360) / 360
+    const s = 0.85, l = 0.55
+    const q = l + s - l * s, p = 2 * l - q
+    const hue2 = (t) => {
+      if (t < 0) t += 1; if (t > 1) t -= 1
+      if (t < 1/6) return p + (q-p)*6*t
+      if (t < 1/2) return q
+      if (t < 2/3) return p + (q-p)*(2/3-t)*6
+      return p
+    }
+    r = hue2(h+1/3); g = hue2(h); b = hue2(h-1/3)
+  }
+  const hex = (v) => Math.round(Math.min(Math.max(v,0),1)*255).toString(16).padStart(2,'0')
+  return `#${hex(r)}${hex(g)}${hex(b)}`
+}
+
+const INFERENCE_NAMES = { 0: 'Non-tree', 1: 'Tree' }
+
 async function runPrediction() {
   if (store.predicting) return
   store.predicting = true
   try {
     const res = await predictPatch(route.params.id, route.params.patchId)
-    applyPredictionColors(res.data.labels)
+    const labels = res.data.labels
+    applyPredictionColors(labels)
+    store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
     store.hasPrediction = true
+    store.inferenceLabels = labels  // keep raw array for "Apply to Labels"
+
+    // Build legend: count occurrences of each label
+    const counts = {}
+    for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
+    store.predictionLegend = Object.entries(counts)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([lbl, count]) => ({
+        label:  Number(lbl),
+        name:   INFERENCE_NAMES[lbl] ?? `Class ${lbl}`,
+        color:  _paletteHex(Number(lbl)),
+        count,
+      }))
   } catch (err) {
-    console.error('Prediction failed:', err)
+    console.error('Inference failed:', err)
   } finally {
     store.predicting = false
   }

@@ -33,6 +33,9 @@ class LabelResponse(BaseModel):
     points_labeled: int
     label_stats: Dict[str, int]
 
+class BulkLabelRequest(BaseModel):
+    labels: List[int]   # one label value per point, length must equal patch point count
+
 class SaveRequest(BaseModel):
     output_filename: str
 

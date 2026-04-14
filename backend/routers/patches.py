@@ -4,7 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, SaveRequest, SaveResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -96,6 +96,18 @@ def label_points(session_id: str, patch_id: str, req: LabelRequest):
     except IndexError as e:
         raise HTTPException(400, str(e))
     return LabelResponse(**result)
+
+
+@router.post("/{session_id}/{patch_id}/apply-labels-bulk")
+def apply_labels_bulk(session_id: str, patch_id: str, req: BulkLabelRequest):
+    """Replace the entire label array with inference (or other bulk) results."""
+    if lm.get_labels(patch_id) is None:
+        raise HTTPException(404, "Patch label state not found — was the patch extracted?")
+    try:
+        result = lm.apply_labels_bulk(patch_id, np.array(req.labels, dtype=np.int32))
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    return result
 
 
 @router.get("/{session_id}/{patch_id}/next-label")
