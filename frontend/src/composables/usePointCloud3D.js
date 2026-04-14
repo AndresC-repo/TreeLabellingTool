@@ -163,6 +163,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   let dtmColors = null            // min-Z in local cell, elevation gradient
   let chmColors = null            // height above ground, green gradient
   let filteredElevationColors = null  // elevation colors with Z filter applied
+  let predictionColors = null         // per-point NN predicted class colors
   let cachedPositions = null
   let cachedClassifications = null
   let _zMin = 0, _zMax = 0       // Z bounds for filter
@@ -199,6 +200,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       }
       _filterLo = _zMin; _filterHi = _zMax
       filteredElevationColors = null  // no filter yet
+      predictionColors = null         // cleared on new load
 
       if (pointsMesh) { scene.value.remove(pointsMesh); pointsMesh.geometry.dispose(); pointsMesh.material.dispose() }
 
@@ -227,6 +229,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     if (viewMode.value === 'classification') return classificationColors
     if (viewMode.value === 'dtm')            return dtmColors
     if (viewMode.value === 'chm')            return chmColors
+    if (viewMode.value === 'prediction')     return predictionColors ?? classificationColors
     // elevation mode — return filtered version if a filter is active
     return filteredElevationColors ?? elevationColors
   }
@@ -251,6 +254,17 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       }
     }
     if (viewMode.value === 'elevation') _applyToMesh(_activeColors())
+  }
+
+  function applyPredictionColors(labels) {
+    const count = pointCount.value
+    predictionColors = new Float32Array(count * 3)
+    for (let i = 0; i < Math.min(labels.length, count); i++) {
+      const [r, g, b] = paletteColor(labels[i])
+      predictionColors[i*3] = r; predictionColors[i*3+1] = g; predictionColors[i*3+2] = b
+    }
+    viewMode.value = 'prediction'
+    _applyToMesh(predictionColors)
   }
 
   function _applyToMesh(src) {
@@ -301,5 +315,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
 
-  return { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
+  return { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
 }

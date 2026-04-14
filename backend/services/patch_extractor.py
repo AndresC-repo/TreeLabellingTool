@@ -1,4 +1,6 @@
+from __future__ import annotations
 from pathlib import Path
+from typing import Optional
 import uuid
 import numpy as np
 import laspy
@@ -28,8 +30,8 @@ def polygon_contains(px: np.ndarray, py: np.ndarray, poly: list) -> np.ndarray:
 def extract_patch(
     session_id: str,
     selection_type: str,
-    bounds_2d: dict | None,
-    polygon_2d: list | None,
+    bounds_2d: Optional[dict],
+    polygon_2d: Optional[list],
 ) -> dict:
     las_path = get_las_path(session_id)
     cache_path, offsets_path = get_xy_cache_paths(session_id)

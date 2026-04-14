@@ -13,6 +13,10 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const viewMode = ref('elevation')
   const lastApplied = ref(null)   // { indices: number[], labelValue: number }
 
+  // Prediction state
+  const predicting    = ref(false)
+  const hasPrediction = ref(false)
+
   // Ground indices (class 2) — for Label GND+ button
   const groundIndices = ref([])
 
@@ -39,6 +43,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     lassoProcessing.value = false
     viewMode.value = 'elevation'
     lastApplied.value = null
+    predicting.value = false
+    hasPrediction.value = false
     groundIndices.value = []
     zBoundsMin.value = 0
     zBoundsMax.value = 0
@@ -49,6 +55,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   return {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
+    predicting, hasPrediction,
     groundIndices, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     addAppliedLabel, reset,
   }

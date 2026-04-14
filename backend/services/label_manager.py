@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Optional
 import numpy as np
 
 # In-memory store: { patch_id: { "labels": np.ndarray(int32), "used": set[int] } }
@@ -54,7 +56,7 @@ def apply_label(patch_id: str, indices: list[int], label_value: int) -> dict:
     }
 
 
-def get_labels(patch_id: str) -> np.ndarray | None:
+def get_labels(patch_id: str) -> Optional[np.ndarray]:
     """Return the label array for a patch, or None if not initialized."""
     state = _state.get(patch_id)
     return state["labels"] if state else None

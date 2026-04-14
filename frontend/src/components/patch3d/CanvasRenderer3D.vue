@@ -19,6 +19,12 @@
         <button :class="{ active: store.viewMode === 'elevation' }"      @click="store.viewMode = 'elevation'"      title="Elevation view [V]">Elevation <kbd>V</kbd></button>
         <button :class="{ active: store.viewMode === 'dtm' }"            @click="store.viewMode = 'dtm'"            title="DTM — terrain min Z per cell [V]">DTM <kbd>V</kbd></button>
         <button :class="{ active: store.viewMode === 'chm' }"            @click="store.viewMode = 'chm'"            title="CHM — height above ground [V]">CHM <kbd>V</kbd></button>
+        <button
+          :class="{ active: store.viewMode === 'prediction' }"
+          :disabled="store.predicting"
+          @click="runPrediction"
+          title="Run NN prediction [P]"
+        >{{ store.predicting ? '…' : 'Predict' }} <kbd>P</kbd></button>
         <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
       </div>
       <div class="btn-group">
@@ -54,7 +60,7 @@ import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
-import { labelPoints, getNextLabel } from '../../api/client.js'
+import { labelPoints, getNextLabel, predictPatch } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
 import ElevationFilter from './ElevationFilter.vue'
 
@@ -66,7 +72,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, highlightIndices, applyLabelColor, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
+const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -193,6 +199,20 @@ async function onLassoFinish() {
 
 // ── Elevation filter label actions ────────────────────────────────────────────
 
+async function runPrediction() {
+  if (store.predicting) return
+  store.predicting = true
+  try {
+    const res = await predictPatch(route.params.id, route.params.patchId)
+    applyPredictionColors(res.data.labels)
+    store.hasPrediction = true
+  } catch (err) {
+    console.error('Prediction failed:', err)
+  } finally {
+    store.predicting = false
+  }
+}
+
 async function onGndBelow() {
   const positions = getPositions()
   if (!positions) return
@@ -295,7 +315,7 @@ onBeforeUnmount(() => {
   dispose()
 })
 
-defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView })
+defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
 </script>
 
 <style scoped>

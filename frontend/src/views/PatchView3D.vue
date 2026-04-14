@@ -66,6 +66,10 @@ function onKeyDown(e) {
     case 'L':
       store.viewMode = 'classification'
       break
+    case 'p':
+    case 'P':
+      renderer3d.value?.runPrediction()
+      break
     case 'Enter':
     case ' ':
       e.preventDefault()

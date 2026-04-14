@@ -126,6 +126,25 @@ def get_patch_colormap(session_id: str, patch_id: str):
     return {"entries": entries}
 
 
+@router.get("/{session_id}/{patch_id}/predict")
+def run_prediction(session_id: str, patch_id: str):
+    """Run NN inference on a patch and return per-point predicted class labels."""
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+    try:
+        from services.predictor import predict
+        las = laspy.read(str(patch_path))
+        labels = predict(
+            np.array(las.x, dtype=np.float32),
+            np.array(las.y, dtype=np.float32),
+            np.array(las.z, dtype=np.float32),
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Inference error: {e}")
+    return {"labels": labels.tolist()}
+
+
 @router.post("/{session_id}/{patch_id}/save", response_model=SaveResponse)
 def save_patch(session_id: str, patch_id: str, req: SaveRequest):
     patch_path = get_patch_path(session_id, patch_id)

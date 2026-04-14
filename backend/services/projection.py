@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 
 # ASPRS classification code palette (value → RGB 0-1 float)

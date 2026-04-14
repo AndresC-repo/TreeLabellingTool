@@ -48,3 +48,6 @@ export const getColormap = (sessionId, scalarField = 'classification') =>
 
 export const getPatchColormap = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/colormap`)
+
+export const predictPatch = (sessionId, patchId) =>
+  api.get(`/patches/${sessionId}/${patchId}/predict`)
