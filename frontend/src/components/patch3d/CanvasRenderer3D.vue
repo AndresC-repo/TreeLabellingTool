@@ -20,11 +20,12 @@
       </div>
       <div class="btn-group">
         <button
-          :class="{ active: store.viewMode === 'prediction' }"
+          v-for="v in inferenceVersions" :key="v.id"
+          :class="{ active: store.viewMode === 'prediction' && store.inferenceVersion === v.id }"
           :disabled="store.predicting"
-          @click="runPrediction"
-          title="Run NN inference [I]"
-        >{{ store.predicting ? '…' : 'Inference' }} <kbd>I</kbd></button>
+          @click="runPrediction(v.id)"
+          :title="v.title"
+        >{{ store.predicting && store.inferenceVersion === v.id ? '…' : v.label }}<kbd v-if="v.shortcut">{{ v.shortcut }}</kbd></button>
       </div>
       <div class="btn-group">
         <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
@@ -79,6 +80,13 @@ const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
 const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
+
+const inferenceVersions = [
+  { id: 'v1', label: 'XYZ',       shortcut: 'I', title: 'Inference — XYZ only [I]' },
+  { id: 'v2', label: 'XYZ+C',     shortcut: '',  title: 'Inference — XYZ + Classification' },
+  { id: 'v3', label: 'XYZ+I',     shortcut: '',  title: 'Inference — XYZ + Intensity' },
+  { id: 'v4', label: 'XYZ+I+C',   shortcut: '',  title: 'Inference — XYZ + Intensity + Classification' },
+]
 
 let controls = null
 let axisRenderer = null
@@ -227,13 +235,14 @@ function _paletteHex(labelValue) {
   return `#${hex(r)}${hex(g)}${hex(b)}`
 }
 
-const INFERENCE_NAMES = { 0: 'Non-tree', 1: 'Tree' }
+const INFERENCE_NAMES = { 0: 'Non-tree', 101: 'Tree' }
 
-async function runPrediction() {
+async function runPrediction(version = 'v1') {
   if (store.predicting) return
   store.predicting = true
+  store.inferenceVersion = version
   try {
-    const res = await predictPatch(route.params.id, route.params.patchId)
+    const res = await predictPatch(route.params.id, route.params.patchId, version)
     const labels = res.data.labels
     applyPredictionColors(labels)
     store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists

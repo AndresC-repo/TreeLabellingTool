@@ -70,7 +70,7 @@ function onKeyDown(e) {
       break
     case 'i':
     case 'I':
-      renderer3d.value?.runPrediction()
+      renderer3d.value?.runPrediction('v1')
       break
     case 'Enter':
     case ' ':

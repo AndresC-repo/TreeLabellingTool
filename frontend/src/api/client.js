@@ -49,8 +49,8 @@ export const getColormap = (sessionId, scalarField = 'classification') =>
 export const getPatchColormap = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/colormap`)
 
-export const predictPatch = (sessionId, patchId) =>
-  api.get(`/patches/${sessionId}/${patchId}/predict`)
+export const predictPatch = (sessionId, patchId, version = 'v1') =>
+  api.get(`/patches/${sessionId}/${patchId}/predict`, { params: { version } })
 
 export const applyLabelsBulk = (sessionId, patchId, labels) =>
   api.post(`/patches/${sessionId}/${patchId}/apply-labels-bulk`, { labels })

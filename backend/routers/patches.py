@@ -139,18 +139,28 @@ def get_patch_colormap(session_id: str, patch_id: str):
 
 
 @router.get("/{session_id}/{patch_id}/predict")
-def run_prediction(session_id: str, patch_id: str):
-    """Run NN inference on a patch and return per-point predicted class labels."""
+def run_prediction(session_id: str, patch_id: str, version: str = "v1"):
+    """Run NN inference on a patch and return per-point predicted class labels.
+
+    Query params:
+        version: 'v1' (XYZ) | 'v2' (XYZ+cls) | 'v3' (XYZ+int) | 'v4' (XYZ+int+cls)
+    """
+    from services.predictor import predict, VALID_VERSIONS, _MODEL_CONFIGS
+    if version not in VALID_VERSIONS:
+        raise HTTPException(400, f"version must be one of {VALID_VERSIONS}")
     patch_path = get_patch_path(session_id, patch_id)
     if not patch_path.exists():
         raise HTTPException(404, "Patch not found")
     try:
-        from services.predictor import predict
+        cfg = _MODEL_CONFIGS[version]
         las = laspy.read(str(patch_path))
         labels = predict(
             np.array(las.x, dtype=np.float32),
             np.array(las.y, dtype=np.float32),
             np.array(las.z, dtype=np.float32),
+            intensity      = np.array(las.intensity,       dtype=np.float32) if cfg['use_intensity']      else None,
+            classification = np.array(las.classification,  dtype=np.float32) if cfg['use_classification'] else None,
+            version=version,
         )
     except Exception as e:
         raise HTTPException(500, f"Inference error: {e}")

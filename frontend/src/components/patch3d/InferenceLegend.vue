@@ -1,6 +1,6 @@
 <template>
   <div class="inference-legend">
-    <h3>Inference</h3>
+    <h3>Inference <span class="ver" v-if="versionLabel">({{ versionLabel }})</span></h3>
     <div v-if="!store.predictionLegend.length" class="hint">No inference run yet</div>
     <div v-for="e in store.predictionLegend" :key="e.label" class="legend-row">
       <span class="swatch" :style="{ background: e.color }"></span>
@@ -21,13 +21,16 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { applyLabelsBulk } from '../../api/client.js'
 
 const route = useRoute()
 const store = usePatch3DStore()
+
+const VERSION_LABELS = { v1: 'XYZ', v2: 'XYZ+C', v3: 'XYZ+I', v4: 'XYZ+I+C' }
+const versionLabel = computed(() => VERSION_LABELS[store.inferenceVersion] ?? '')
 
 const applying = ref(false)
 const applied  = ref(false)
@@ -70,6 +73,7 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .lbl { flex: 1; color: #cce; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cnt { color: #556; font-size: 11px; white-space: nowrap; }
 .hint { font-size: 12px; color: #556; }
+.ver { font-size: 11px; color: #778; font-weight: normal; }
 .apply-btn {
   margin-top: 10px; width: 100%; padding: 8px;
   background: #2a4a6e; border: 1px solid #4a7aae;

@@ -14,8 +14,9 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const lastApplied = ref(null)   // { indices: number[], labelValue: number }
 
   // Prediction state
-  const predicting       = ref(false)
-  const hasPrediction    = ref(false)
+  const predicting        = ref(false)
+  const hasPrediction     = ref(false)
+  const inferenceVersion  = ref('v1')   // 'v1' | 'v2'
   // [{ label: number, name: string, color: string, count: number }]
   const predictionLegend = ref([])
   // Raw per-point label array from last inference (Int32Array or plain array)
@@ -49,6 +50,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     lastApplied.value = null
     predicting.value = false
     hasPrediction.value = false
+    inferenceVersion.value = 'v1'
     predictionLegend.value = []
     inferenceLabels.value  = null
     groundIndices.value = []
@@ -61,7 +63,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   return {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
-    predicting, hasPrediction, predictionLegend, inferenceLabels,
+    predicting, hasPrediction, predictionLegend, inferenceLabels, inferenceVersion,
     groundIndices, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     addAppliedLabel, reset,
   }
