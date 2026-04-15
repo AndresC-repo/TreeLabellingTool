@@ -18,14 +18,26 @@
       <div class="btn-group">
         <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
       </div>
-      <div class="btn-group">
+      <div class="btn-group inference-dropdown-wrap" ref="inferenceWrap">
         <button
-          v-for="v in inferenceVersions" :key="v.id"
-          :class="{ active: store.viewMode === 'prediction' && store.inferenceVersion === v.id }"
+          :class="{ active: store.viewMode === 'prediction' }"
           :disabled="store.predicting"
-          @click="runPrediction(v.id)"
-          :title="v.title"
-        >{{ store.predicting && store.inferenceVersion === v.id ? '…' : v.label }}<kbd v-if="v.shortcut">{{ v.shortcut }}</kbd></button>
+          @click="inferenceOpen = !inferenceOpen"
+          title="Inference — choose model [I]"
+        >
+          {{ store.predicting ? '…' : 'Inference' }}
+          <span v-if="store.inferenceVersion" class="inf-ver">({{ inferenceVersions.find(v => v.id === store.inferenceVersion)?.label }})</span>
+          <kbd>I</kbd> ▾
+        </button>
+        <div v-if="inferenceOpen" class="inference-menu">
+          <button
+            v-for="v in inferenceVersions" :key="v.id"
+            :class="{ active: store.inferenceVersion === v.id && store.viewMode === 'prediction' }"
+            :disabled="store.predicting"
+            @click="selectInference(v.id)"
+            :title="v.title"
+          >{{ v.label }}<span class="inf-desc">{{ v.desc }}</span></button>
+        </div>
       </div>
       <div class="btn-group">
         <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
@@ -82,11 +94,25 @@ const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredi
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
-  { id: 'v1', label: 'XYZ',       shortcut: 'I', title: 'Inference — XYZ only [I]' },
-  { id: 'v2', label: 'XYZ+C',     shortcut: '',  title: 'Inference — XYZ + Classification' },
-  { id: 'v3', label: 'XYZ+I',     shortcut: '',  title: 'Inference — XYZ + Intensity' },
-  { id: 'v4', label: 'XYZ+I+C',   shortcut: '',  title: 'Inference — XYZ + Intensity + Classification' },
+  { id: 'v1', label: 'XYZ',     desc: 'Coordinates only',                   title: 'Inference — XYZ only [I]' },
+  { id: 'v2', label: 'XYZ+C',   desc: 'XYZ + Classification',               title: 'Inference — XYZ + Classification' },
+  { id: 'v3', label: 'XYZ+I',   desc: 'XYZ + Intensity',                    title: 'Inference — XYZ + Intensity' },
+  { id: 'v4', label: 'XYZ+I+C', desc: 'XYZ + Intensity + Classification',   title: 'Inference — XYZ + Intensity + Classification' },
 ]
+
+const inferenceOpen = ref(false)
+const inferenceWrap = ref(null)
+
+function selectInference(version) {
+  inferenceOpen.value = false
+  runPrediction(version)
+}
+
+function onClickOutsideInference(e) {
+  if (inferenceWrap.value && !inferenceWrap.value.contains(e.target)) {
+    inferenceOpen.value = false
+  }
+}
 
 let controls = null
 let axisRenderer = null
@@ -316,6 +342,7 @@ watch(() => [store.elevFilterMin, store.elevFilterMax], ([lo, hi]) => {
 })
 
 onMounted(async () => {
+  document.addEventListener('click', onClickOutsideInference, true)
   const result = await load()
   store.pointCount = pointCount.value
 
@@ -363,6 +390,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('click', onClickOutsideInference, true)
   controls?.dispose()
   if (axisAnimId) cancelAnimationFrame(axisAnimId)
   axisRenderer?.dispose()
@@ -396,6 +424,28 @@ defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, cam
   border-radius: 3px; padding: 0 3px; margin-left: 3px;
   line-height: 1.6; color: #aac; vertical-align: middle;
 }
+
+.inference-dropdown-wrap { position: relative; }
+.inf-ver { font-size: 10px; color: #88a; margin-left: 3px; }
+.inference-menu {
+  position: absolute; top: calc(100% + 4px); left: 0;
+  background: #1a1a2e; border: 1px solid #445;
+  border-radius: 6px; overflow: hidden;
+  display: flex; flex-direction: column;
+  min-width: 200px; z-index: 100;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.inference-menu button {
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: 8px 12px; border-radius: 0; border: none;
+  border-bottom: 1px solid #2a3a5a; background: #1e2840;
+  text-align: left; gap: 2px;
+}
+.inference-menu button:last-child { border-bottom: none; }
+.inference-menu button:hover:not(.active):not(:disabled) { background: #2a3a5a; }
+.inference-menu button.active { background: #3a5a8e; color: #fff; }
+.inf-desc { font-size: 10px; color: #667; font-weight: normal; }
+.inference-menu button.active .inf-desc { color: #99c; }
 
 .axis-triad {
   position: absolute; bottom: 16px; left: 16px;
