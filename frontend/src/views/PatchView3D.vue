@@ -10,7 +10,7 @@
       <aside class="side-panel">
         <LabelPanel ref="labelPanel" />
         <PatchLegend v-if="store.viewMode === 'classification'" />
-        <InferenceLegend v-if="store.viewMode === 'prediction'" />
+        <InferenceLegend v-if="store.viewMode === 'prediction'" @segment-done="onSegmentDone" />
         <SavePanel ref="savePanel" />
       </aside>
     </div>
@@ -32,6 +32,11 @@ const store = usePatch3DStore()
 const renderer3d = ref(null)
 const labelPanel = ref(null)
 const savePanel = ref(null)
+
+function onSegmentDone(newLabels) {
+  renderer3d.value?.applyPredictionColors(newLabels)
+  store.viewMode = 'prediction'
+}
 
 function onKeyDown(e) {
   // Ignore shortcuts when typing in an input/textarea

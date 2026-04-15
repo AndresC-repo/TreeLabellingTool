@@ -397,7 +397,7 @@ onBeforeUnmount(() => {
   dispose()
 })
 
-defineExpose({ highlightIndices, applyLabelColor, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
+defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
 </script>
 
 <style scoped>

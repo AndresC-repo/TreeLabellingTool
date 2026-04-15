@@ -43,3 +43,15 @@ class SaveResponse(BaseModel):
     download_url: str
     output_filename: str
     point_count: int
+
+class SegmentTreesRequest(BaseModel):
+    labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
+    cell_size: float = 0.5
+    smooth_sigma: float = 3.0
+    min_height: float = 3.0
+    min_distance: int = 10
+    max_radius: float = 15.0
+
+class SegmentTreesResponse(BaseModel):
+    labels: List[int]            # per-point instance labels (0=non-tree, 201+=instances)
+    tree_count: int

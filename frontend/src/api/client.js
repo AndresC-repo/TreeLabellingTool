@@ -54,3 +54,6 @@ export const predictPatch = (sessionId, patchId, version = 'v1') =>
 
 export const applyLabelsBulk = (sessionId, patchId, labels) =>
   api.post(`/patches/${sessionId}/${patchId}/apply-labels-bulk`, { labels })
+
+export const segmentTrees = (sessionId, patchId, labels, params = {}) =>
+  api.post(`/patches/${sessionId}/${patchId}/segment-trees`, { labels, ...params })

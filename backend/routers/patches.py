@@ -4,7 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -108,6 +108,52 @@ def apply_labels_bulk(session_id: str, patch_id: str, req: BulkLabelRequest):
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
     return result
+
+
+@router.post("/{session_id}/{patch_id}/segment-trees", response_model=SegmentTreesResponse)
+def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
+    """CHM-based tree instance segmentation.
+
+    Accepts per-point semantic labels (0=non-tree, 101=tree) and returns
+    per-point instance labels (0=non-tree, 201+=individual tree instances).
+    Does NOT mutate the in-memory label state — caller must apply-labels-bulk separately.
+    """
+    from services.tree_segmentor import segment_tree_instances
+
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+
+    labels_in = np.array(req.labels, dtype=np.int32)
+
+    try:
+        las = laspy.read(str(patch_path))
+        x   = np.array(las.x,              dtype=np.float32)
+        y   = np.array(las.y,              dtype=np.float32)
+        z   = np.array(las.z,              dtype=np.float32)
+        cls = np.array(las.classification, dtype=np.int32)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read patch: {e}")
+
+    if len(labels_in) != len(x):
+        raise HTTPException(
+            400,
+            f"Label array length {len(labels_in)} does not match patch point count {len(x)}",
+        )
+
+    try:
+        new_labels, tree_count = segment_tree_instances(
+            x, y, z, labels_in, cls,
+            cell_size=req.cell_size,
+            smooth_sigma=req.smooth_sigma,
+            min_height=req.min_height,
+            min_distance=req.min_distance,
+            max_radius=req.max_radius,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Segmentation error: {e}")
+
+    return SegmentTreesResponse(labels=new_labels.tolist(), tree_count=tree_count)
 
 
 @router.get("/{session_id}/{patch_id}/next-label")
