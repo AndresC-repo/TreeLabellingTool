@@ -141,6 +141,17 @@ function drawHatches(ctx) {
       ctx.strokeStyle = 'rgba(100,200,255,0.6)'
       ctx.lineWidth = 1.5
       ctx.stroke()
+    } else if (region.selection_type === 'polygon' && region.polygon_2d?.length) {
+      const c = region.polygon_2d.map(([wx, wy]) => worldToCanvas(wx, wy))
+      ctx.beginPath()
+      ctx.moveTo(c[0].x, c[0].y)
+      for (let i = 1; i < c.length; i++) ctx.lineTo(c[i].x, c[i].y)
+      ctx.closePath()
+      ctx.fillStyle = 'rgba(255,215,0,0.15)'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255,215,0,0.7)'
+      ctx.lineWidth = 1.5
+      ctx.stroke()
     }
   }
 }
