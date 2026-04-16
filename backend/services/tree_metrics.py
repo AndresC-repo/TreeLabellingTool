@@ -20,7 +20,7 @@ def compute_tree_metrics(
     z: np.ndarray,
     labels: np.ndarray,         # int32 (N,) — 0=non-tree, 201+=instances
     original_cls: np.ndarray,   # int32 (N,) — ASPRS class, 2=ground
-    cell_size: float = 1.0,
+    cell_size: float = 1.5,
     dtm_grid=None,
     dtm_rows: int = 64,
     dtm_cols: int = 64,

@@ -47,7 +47,7 @@ class SaveResponse(BaseModel):
 
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
-    cell_size: float = 1.0
+    cell_size: float = 1.5
     smooth_window: int = 1
     smooth_sigma: float = 0.0
     min_height: float = 2.5
@@ -73,7 +73,7 @@ class SegmentTreesResponse(BaseModel):
 
 class TreeMetricsRequest(BaseModel):
     labels: List[int]              # per-point instance labels (201+=instances)
-    cell_size: float = 1.0
+    cell_size: float = 1.5
     dtm_grid: Optional[List[float]] = None
     dtm_rows: int = 64
     dtm_cols: int = 64

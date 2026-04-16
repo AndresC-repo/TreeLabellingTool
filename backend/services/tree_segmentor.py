@@ -87,7 +87,7 @@ def segment_tree_instances(
     z: np.ndarray,
     labels: np.ndarray,            # int32 (N,)  0=non-tree, 101=tree
     original_cls: np.ndarray,      # int32 (N,)  ASPRS classification, 2=ground
-    cell_size: float = 1.0,        # CHM grid resolution (m)
+    cell_size: float = 1.5,        # CHM grid resolution (m)
     smooth_window: int = 1,        # Duncanson uniform-filter window (cells)
     smooth_sigma: float = 0.0,     # additional Gaussian σ after window filter
     min_height: float = 2.5,       # min CHM (m) to be canopy

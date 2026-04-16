@@ -177,7 +177,7 @@ const treeMetrics     = ref([])
 
 // Segmentation hyperparameters — all editable via UI
 const params = reactive({
-  cell_size:        1.0,
+  cell_size:        1.5,
   smooth_window:    1,
   smooth_sigma:     0.0,
   min_height:       2.5,
