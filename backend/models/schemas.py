@@ -47,13 +47,14 @@ class SaveResponse(BaseModel):
 
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
-    cell_size: float = 0.5
-    smooth_window: int = 5       # Duncanson uniform-filter window size (cells); paper: 5
-    smooth_sigma: float = 0.0   # optional additional Gaussian σ after window filter
-    min_height: float = 2.0
-    min_distance: int = 5
-    max_radius: float = 15.0
-    min_tree_points: int = 50
+    cell_size: float = 1.0
+    smooth_window: int = 1
+    smooth_sigma: float = 0.0
+    min_height: float = 2.5
+    min_distance: int = 10
+    max_radius: float = 1.0
+    min_tree_points: int = 500
+    min_crown_cells: int = 70
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
     # When provided it is used for per-point terrain height instead of re-deriving from the LAS file.
     dtm_grid: Optional[List[float]] = None   # flat array, dtm_rows * dtm_cols values

@@ -87,12 +87,13 @@ def segment_tree_instances(
     z: np.ndarray,
     labels: np.ndarray,            # int32 (N,)  0=non-tree, 101=tree
     original_cls: np.ndarray,      # int32 (N,)  ASPRS classification, 2=ground
-    cell_size: float = 0.5,        # CHM grid resolution (m)
-    smooth_window: int = 5,        # Duncanson uniform-filter window (cells); paper: 5
+    cell_size: float = 1.0,        # CHM grid resolution (m)
+    smooth_window: int = 1,        # Duncanson uniform-filter window (cells)
     smooth_sigma: float = 0.0,     # additional Gaussian σ after window filter
-    min_height: float = 2.0,       # min CHM (m) to be canopy; paper: 2 m
-    min_distance: int = 5,         # min peak separation (cells) for seed detection
-    min_tree_points: int = 50,     # merge basins smaller than this
+    min_height: float = 2.5,       # min CHM (m) to be canopy
+    min_distance: int = 10,        # min peak separation (cells) for seed detection
+    min_tree_points: int = 500,    # merge basins smaller than this
+    min_crown_cells: int = 70,     # remove isolated canopy blobs smaller than this (cells)
     # Unused legacy params (kept for API compatibility):
     max_radius: float = 15.0,
     # External DTM from the point-cloud view
@@ -177,6 +178,29 @@ def segment_tree_instances(
     np.put(tree_grid, tr * cols + tc, True)
     tree_grid   = tree_grid.reshape(rows, cols)
     canopy_mask = tree_grid & (chm_smooth >= min_height)
+
+    # ── Drop isolated canopy blobs (noise scatter from cut/partial trees) ───────
+    # Connected components in the canopy mask: blobs with fewer cells than
+    # min_crown_cells are spatially isolated and treated as noise — their points
+    # get label 0 (non-tree) so they don't seed spurious watershed basins.
+    if min_crown_cells > 0 and canopy_mask.any():
+        comp_lbl, n_comp = nd_label(canopy_mask)
+        comp_sizes = np.bincount(comp_lbl.ravel())   # index 0 = background
+        remove_ids = np.where((comp_sizes < min_crown_cells) & (np.arange(len(comp_sizes)) > 0))[0]
+        if remove_ids.size:
+            noise_cells = np.isin(comp_lbl, remove_ids)
+            canopy_mask[noise_cells] = False
+            # Also clear tree_grid so those points fall outside canopy mask
+            tree_grid[noise_cells] = False
+            removed_pts = noise_cells[tr, tc]          # which tree points are in removed blobs
+            new_labels[np.where(tree_mask)[0][removed_pts]] = 0   # label as non-tree
+            tree_mask_arr = np.where(tree_mask)[0]
+            keep = ~removed_pts
+            tr, tc = tr[keep], tc[keep]
+            tree_mask = np.zeros(len(labels), dtype=bool)
+            tree_mask[tree_mask_arr[keep]] = True
+            print(f"[tree_segmentor] removed {remove_ids.size} isolated blob(s) "
+                  f"({removed_pts.sum():,} pts → label 0)")
 
     n_tree = int(tree_mask.sum())
     print(f"[tree_segmentor] grid {rows}×{cols}, {n_tree:,} tree pts, "

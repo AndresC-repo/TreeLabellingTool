@@ -12,7 +12,24 @@
     <div v-if="hasTreeLabel" class="segment-section">
       <div class="section-header" @click="paramsOpen = !paramsOpen">
         <span>Segmentation params</span>
-        <span class="chevron">{{ paramsOpen ? '▲' : '▼' }}</span>
+        <span class="header-right">
+          <span
+            class="help-btn"
+            @click.stop="helpOpen = !helpOpen"
+            :title="helpOpen ? 'Hide help' : 'What do these parameters do?'"
+          >?</span>
+          <span class="chevron">{{ paramsOpen ? '▲' : '▼' }}</span>
+        </span>
+      </div>
+
+      <div v-if="helpOpen" class="help-box">
+        <div class="help-row"><span class="help-name">Cell size</span><span class="help-desc">Size of each grid cell in metres. Smaller = more detail but slower. 1 m works well for most trees.</span></div>
+        <div class="help-row"><span class="help-name">Smooth window</span><span class="help-desc">Blurs the height model before finding tree tops. Higher = fewer false splits in dense canopy. Use 1 for isolated trees, 5+ for overlapping crowns.</span></div>
+        <div class="help-row"><span class="help-name">Extra Gauss σ</span><span class="help-desc">Extra smoothing on top of the window filter. Leave at 0 unless the canopy is very noisy.</span></div>
+        <div class="help-row"><span class="help-name">Min height</span><span class="help-desc">Points below this height (above ground) are ignored. Filters out low shrubs and ground clutter.</span></div>
+        <div class="help-row"><span class="help-name">Peak window</span><span class="help-desc">Minimum distance (in cells) between two tree tops. Prevents one big tree from being split into many. Roughly equal to the smallest expected crown radius.</span></div>
+        <div class="help-row"><span class="help-name">Min pts / tree</span><span class="help-desc">Trees with fewer points than this are merged into the nearest larger tree. Removes tiny over-split fragments.</span></div>
+        <div class="help-row"><span class="help-name">Min blob size</span><span class="help-desc">Isolated groups of canopy cells smaller than this are removed before segmentation. Cleans up scattered points from partially-visible trees at patch edges.</span></div>
       </div>
 
       <div v-if="paramsOpen" class="params-grid">
@@ -49,7 +66,11 @@
         </label>
         <label class="param-row">
           <span class="param-name" title="Instances with fewer points than this are merged into the nearest valid (larger) tree.">Min pts / tree</span>
-          <input v-model.number="params.min_tree_points" type="number" min="1" step="10" class="param-input" />
+          <input v-model.number="params.min_tree_points" type="number" min="1" step="50" class="param-input" />
+        </label>
+        <label class="param-row">
+          <span class="param-name" title="Canopy blobs smaller than this many CHM cells are treated as noise (isolated scatter from partially-visible trees). 0 = disabled. At cell size 1 m, ~20–50 cells ≈ a 5–8 m radius patch.">Min blob size (cells)</span>
+          <input v-model.number="params.min_crown_cells" type="number" min="0" step="5" class="param-input" />
         </label>
       </div>
 
@@ -106,16 +127,18 @@ const applying        = ref(false)
 const applied         = ref(false)
 const instanceMessage = ref('')
 const paramsOpen      = ref(false)
+const helpOpen        = ref(false)
 
 // Segmentation hyperparameters — all editable via UI
 const params = reactive({
-  cell_size:       0.5,
-  smooth_window:   5,
-  smooth_sigma:    0.0,
-  min_height:      2.0,
-  min_distance:    5,
-  max_radius:      15.0,
-  min_tree_points: 50,
+  cell_size:        1.0,
+  smooth_window:    1,
+  smooth_sigma:     0.0,
+  min_height:       2.5,
+  min_distance:     10,
+  max_radius:       1.0,
+  min_tree_points:  500,
+  min_crown_cells:  70,
 })
 
 // Show segment controls as long as we have inference data
@@ -268,7 +291,28 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   user-select: none;
 }
 .section-header:hover { color: #aad; }
+.header-right { display: flex; align-items: center; gap: 6px; }
 .chevron { font-size: 10px; }
+.help-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #334; border: 1px solid #556;
+  color: #99b; font-size: 9px; font-weight: bold;
+  cursor: pointer; line-height: 1; flex-shrink: 0;
+}
+.help-btn:hover { background: #445; border-color: #778; color: #ccf; }
+
+.help-box {
+  background: #0a1020; border: 1px solid #2a3050;
+  border-radius: 5px; padding: 8px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.help-row { display: flex; gap: 8px; font-size: 10px; line-height: 1.4; }
+.help-name {
+  color: #99c; font-weight: 600; white-space: nowrap;
+  min-width: 80px; flex-shrink: 0;
+}
+.help-desc { color: #778; }
 
 .params-grid {
   display: flex; flex-direction: column; gap: 4px;

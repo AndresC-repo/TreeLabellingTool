@@ -169,6 +169,7 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
             min_distance=req.min_distance,
             max_radius=req.max_radius,
             min_tree_points=req.min_tree_points,
+            min_crown_cells=req.min_crown_cells,
             dtm_grid=req.dtm_grid,
             dtm_rows=req.dtm_rows,
             dtm_cols=req.dtm_cols,
