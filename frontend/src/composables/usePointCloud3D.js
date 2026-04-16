@@ -182,6 +182,42 @@ function computeCHMColors(positions, origCls, count) {
   return colors
 }
 
+// ── Inference CHM — tree points only ─────────────────────────────────────────
+// Same terrain model as computeCHMColors, but only points with inferenceLabel === 101
+// are colored. Everything else (non-tree, ground) is shown as background.
+// Returns null when no ground points exist (same condition as regular CHM).
+function computeInferenceCHMColors(positions, origCls, inferenceLabels, count) {
+  const grid = _buildGroundTerrain(positions, origCls, count)
+  if (!grid) return null
+
+  const { terrain, GRID, xMin, yMin, xRange, yRange, BG_COLOR } = grid
+
+  let maxH = 0
+  const heights = new Float32Array(count)
+  for (let i = 0; i < count; i++) {
+    if (inferenceLabels[i] !== 101) continue
+    const cx = Math.min(((positions[i*3]   - xMin) / xRange * GRID) | 0, GRID - 1)
+    const cy = Math.min(((positions[i*3+1] - yMin) / yRange * GRID) | 0, GRID - 1)
+    const h  = Math.max(positions[i*3+2] - terrain[cy * GRID + cx], 0)
+    heights[i] = h
+    if (h > maxH) maxH = h
+  }
+  if (maxH < 1e-6) maxH = 1
+
+  const colors = new Float32Array(count * 3)
+  for (let i = 0; i < count; i++) {
+    if (inferenceLabels[i] !== 101) {
+      colors[i*3] = BG_COLOR[0]; colors[i*3+1] = BG_COLOR[1]; colors[i*3+2] = BG_COLOR[2]
+      continue
+    }
+    const t = heights[i] / maxH
+    colors[i*3]   = t < 0.5 ? 0          : (t - 0.5) * 2
+    colors[i*3+1] = t < 0.5 ? t * 2      : 1
+    colors[i*3+2] = t < 0.5 ? 1 - t * 2  : 0
+  }
+  return colors
+}
+
 // ── Main composable ───────────────────────────────────────────────────────────
 
 export function usePointCloud3D(scene, sessionId, patchId) {
@@ -199,6 +235,8 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   let cachedClassifications = null
   let currentLabels = null        // Int32Array tracking the current label per point
   let origAsprsClassifications = null // original ASPRS classification from LAS (never changes)
+  let cachedTerrainGrid = null    // result of _buildGroundTerrain — null when no class-2 points
+  let inferenceCHMColors = null   // CHM colored only for tree-labeled (101) points
   let _zMin = 0, _zMax = 0       // Z bounds for filter
   let _filterLo = -Infinity, _filterHi = Infinity  // current filter bounds
   const viewMode = ref('elevation')
@@ -222,9 +260,10 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       }
 
       // DTM and CHM computed from positions + original ASPRS classifications (class 2 = ground)
-      dtmColors = computeDTMColors(positions, origClassifications, count)
-      chmColors = computeCHMColors(positions, origClassifications, count)
-      dtmAvailable.value = dtmColors !== null
+      cachedTerrainGrid = _buildGroundTerrain(positions, origClassifications, count)
+      dtmAvailable.value = cachedTerrainGrid !== null
+      dtmColors = cachedTerrainGrid ? computeDTMColors(positions, origClassifications, count) : null
+      chmColors = cachedTerrainGrid ? computeCHMColors(positions, origClassifications, count) : null
 
       cachedPositions = positions
       cachedClassifications = classifications
@@ -269,6 +308,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     if (viewMode.value === 'dtm')            return dtmColors ?? classificationColors
     if (viewMode.value === 'chm')            return chmColors ?? classificationColors
     if (viewMode.value === 'prediction')     return predictionColors ?? classificationColors
+    if (viewMode.value === 'inference-chm')  return inferenceCHMColors ?? chmColors ?? classificationColors
     // elevation mode — return filtered version if a filter is active
     return filteredElevationColors ?? elevationColors
   }
@@ -298,9 +338,17 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function applyPredictionColors(labels) {
     const count = pointCount.value
     predictionColors = new Float32Array(count * 3)
+    const inferenceArr = new Int32Array(count)
     for (let i = 0; i < Math.min(labels.length, count); i++) {
       const [r, g, b] = paletteColor(labels[i])
       predictionColors[i*3] = r; predictionColors[i*3+1] = g; predictionColors[i*3+2] = b
+      inferenceArr[i] = labels[i]
+    }
+    // Compute tree-only CHM using the inference labels (101 = tree)
+    if (cachedPositions && origAsprsClassifications) {
+      inferenceCHMColors = computeInferenceCHMColors(
+        cachedPositions, origAsprsClassifications, inferenceArr, count
+      )
     }
     viewMode.value = 'prediction'
     _applyToMesh(predictionColors)
@@ -375,6 +423,22 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function getPositions() { return cachedPositions }
 
+  // Returns DTM grid data for use in segmentation (passes terrain to backend).
+  // Returns null when no class-2 ground points exist.
+  function getDTMGrid() {
+    if (!cachedTerrainGrid) return null
+    const { terrain, GRID, xMin, yMin, xRange, yRange } = cachedTerrainGrid
+    return {
+      grid:   Array.from(terrain),   // flat float array, GRID*GRID values
+      rows:   GRID,
+      cols:   GRID,
+      xMin,
+      yMin,
+      xRange,
+      yRange,
+    }
+  }
+
   function dispose() {
     if (pointsMesh) {
       scene.value.remove(pointsMesh)
@@ -386,5 +450,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
 
-  return { load, loading, pointCount, dtmAvailable, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
 }

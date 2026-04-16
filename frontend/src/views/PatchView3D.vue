@@ -10,7 +10,10 @@
       <aside class="side-panel">
         <LabelPanel ref="labelPanel" />
         <PatchLegend v-if="store.viewMode === 'classification'" />
-        <InferenceLegend v-if="store.viewMode === 'prediction'" @segment-done="onSegmentDone" />
+        <InferenceLegend
+          v-if="store.viewMode === 'prediction' || store.viewMode === 'inference-chm'"
+          @segment-done="onSegmentDone"
+        />
         <SavePanel ref="savePanel" />
       </aside>
     </div>
@@ -34,8 +37,10 @@ const labelPanel = ref(null)
 const savePanel = ref(null)
 
 function onSegmentDone(newLabels) {
+  // applyPredictionColors recomputes both prediction and inference-CHM color buffers
   renderer3d.value?.applyPredictionColors(newLabels)
-  store.viewMode = 'prediction'
+  // Stay in whichever inference sub-view was active (prediction or inference-chm)
+  if (store.viewMode !== 'inference-chm') store.viewMode = 'prediction'
 }
 
 function onKeyDown(e) {
@@ -64,7 +69,11 @@ function onKeyDown(e) {
       break
     case 'v':
     case 'V': {
-      const modes = ['elevation', 'dtm', 'chm']
+      // In inference mode cycle through inference sub-views; otherwise standard terrain views
+      const inferenceModes = ['prediction', 'dtm', 'inference-chm']
+      const standardModes  = ['elevation',  'dtm', 'chm']
+      const isInferenceMode = inferenceModes.includes(store.viewMode)
+      const modes = (isInferenceMode && store.hasPrediction) ? inferenceModes : standardModes
       const cur = modes.indexOf(store.viewMode)
       store.viewMode = modes[(cur < 0 ? 0 : cur + 1) % modes.length]
       break

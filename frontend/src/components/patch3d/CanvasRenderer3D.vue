@@ -11,24 +11,62 @@
       @cancel="lasso.cancelLasso"
     />
     <div class="toolbar-overlay">
+      <!-- Rotate / Select -->
       <div class="btn-group">
-        <button :class="{ active: rotateMode }"  @click="setRotate(true)"  title="Rotate / pan view">&#8635; Rotate</button>
-        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; Select <kbd>R</kbd></button>
+        <button :class="{ active: rotateMode }"  @click="setRotate(true)"  title="Rotate / pan view">&#8635;</button>
+        <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; <kbd>R</kbd></button>
       </div>
-      <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
+
+      <!-- ── Standard view ── -->
+      <div class="btn-group mode-group">
+        <span class="mode-label">Standard</span>
+        <div class="btn-row">
+          <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation colours [V]">Elevation <kbd>V</kbd></button>
+          <button :class="{ active: store.viewMode === 'dtm' }"       @click="store.viewMode = 'dtm'"       title="DTM — shows only ground points coloured by elevation">DTM</button>
+          <button :class="{ active: store.viewMode === 'chm' }"       @click="store.viewMode = 'chm'"       title="CHM — all non-ground points coloured by height above terrain">CHM</button>
+        </div>
       </div>
-      <div class="btn-group inference-dropdown-wrap" ref="inferenceWrap">
-        <button
-          :class="{ active: store.viewMode === 'prediction' }"
-          :disabled="store.predicting"
-          @click="inferenceOpen = !inferenceOpen"
-          title="Inference — choose model [I]"
-        >
-          {{ store.predicting ? '…' : 'Inference' }}
-          <span v-if="store.inferenceVersion" class="inf-ver">({{ inferenceVersions.find(v => v.id === store.inferenceVersion)?.label }})</span>
-          <kbd>I</kbd> ▾
-        </button>
+
+      <!-- ── Labels view ── -->
+      <div class="btn-group mode-group">
+        <span class="mode-label">Labels</span>
+        <div class="btn-row">
+          <button :class="{ active: store.viewMode === 'classification' }" @click="store.viewMode = 'classification'" title="Labels view [L]">Labels <kbd>L</kbd></button>
+        </div>
+      </div>
+
+      <!-- ── Inference view ── -->
+      <div class="btn-group mode-group inference-dropdown-wrap" ref="inferenceWrap">
+        <span class="mode-label">Inference</span>
+        <div class="btn-row">
+          <button
+            :class="{ active: store.viewMode === 'prediction' && !store.predicting }"
+            :disabled="store.predicting"
+            @click="inferenceOpen = !inferenceOpen"
+            title="Run inference model [I]"
+          >
+            {{ store.predicting ? '…' : (store.hasPrediction ? inferenceVersions.find(v => v.id === store.inferenceVersion)?.label ?? 'Run' : 'Run') }}
+            <kbd>I</kbd> ▾
+          </button>
+          <!-- Sub-views only visible after inference has been run -->
+          <template v-if="store.hasPrediction">
+            <button
+              :class="{ active: store.viewMode === 'prediction' }"
+              @click="store.viewMode = 'prediction'"
+              title="Show inference prediction colours"
+            >Prediction</button>
+            <button
+              :class="{ active: store.viewMode === 'dtm' }"
+              @click="store.viewMode = 'dtm'"
+              title="DTM — ground elevation"
+            >DTM</button>
+            <button
+              :class="{ active: store.viewMode === 'inference-chm' }"
+              @click="store.viewMode = 'inference-chm'"
+              title="Tree CHM — height above terrain for tree points only (label 101)"
+            >Tree CHM</button>
+          </template>
+        </div>
         <div v-if="inferenceOpen" class="inference-menu">
           <button
             v-for="v in inferenceVersions" :key="v.id"
@@ -39,11 +77,8 @@
           >{{ v.label }}<span class="inf-desc">{{ v.desc }}</span></button>
         </div>
       </div>
-      <div class="btn-group">
-        <button :class="{ active: store.viewMode === 'elevation' }" @click="store.viewMode = 'elevation'" title="Elevation view [V]">Elevation <kbd>V</kbd></button>
-        <button :class="{ active: store.viewMode === 'dtm' }"       @click="store.viewMode = 'dtm'"       title="DTM — terrain min Z per cell [V]">DTM <kbd>V</kbd></button>
-        <button :class="{ active: store.viewMode === 'chm' }"       @click="store.viewMode = 'chm'"       title="CHM — height above ground [V]">CHM <kbd>V</kbd></button>
-      </div>
+
+      <!-- Camera -->
       <div class="btn-group">
         <button @click="setTopView"  title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
         <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
@@ -96,7 +131,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -122,7 +157,8 @@ function onClickOutsideInference(e) {
 }
 
 let controls = null
-let peaksMesh = null
+let peaksMesh = null      // red dots — valid tree tops (after merge filter)
+let seedPeaksMesh = null  // yellow dots — all CHM local maxima (watershed seeds)
 let axisRenderer = null
 let axisScene = null
 let axisCamera = null
@@ -356,29 +392,39 @@ watch(() => [store.elevFilterMin, store.elevFilterMax], ([lo, hi]) => {
 
 // ── Segmentation peaks — red dot markers ─────────────────────────────────────
 
-function _rebuildPeaksMesh(peaks) {
-  if (peaksMesh) {
-    scene.value.remove(peaksMesh)
-    peaksMesh.geometry.dispose()
-    peaksMesh.material.dispose()
-    peaksMesh = null
-  }
-  if (!peaks?.length || store.viewMode !== 'prediction') return
-
-  const pos = new Float32Array(peaks.length * 3)
-  peaks.forEach(([px, py, pz], i) => {
+function _buildPointsMesh(positions, color, size) {
+  if (!positions?.length) return null
+  const pos = new Float32Array(positions.length * 3)
+  positions.forEach(([px, py, pz], i) => {
     pos[i * 3] = px; pos[i * 3 + 1] = py; pos[i * 3 + 2] = pz
   })
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
-  peaksMesh = new THREE.Points(geo, new THREE.PointsMaterial({
-    color: 0xff2020, size: 10, sizeAttenuation: false, depthTest: false,
+  return new THREE.Points(geo, new THREE.PointsMaterial({
+    color, size, sizeAttenuation: false, depthTest: false,
   }))
-  scene.value.add(peaksMesh)
 }
 
-watch(() => store.segmentationPeaks, _rebuildPeaksMesh)
-watch(() => store.viewMode, () => _rebuildPeaksMesh(store.segmentationPeaks))
+function _rebuildPeaksMeshes() {
+  // Remove existing
+  if (peaksMesh)     { scene.value.remove(peaksMesh);     peaksMesh.geometry.dispose();     peaksMesh.material.dispose();     peaksMesh = null }
+  if (seedPeaksMesh) { scene.value.remove(seedPeaksMesh); seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose(); seedPeaksMesh = null }
+
+  const inferenceActive = store.viewMode === 'prediction' || store.viewMode === 'inference-chm'
+  if (!inferenceActive) return
+
+  // Yellow smaller dots = ALL CHM local maxima (watershed seeds)
+  const sm = _buildPointsMesh(store.segmentationSeedPeaks, 0xffcc00, 6)
+  if (sm) { seedPeaksMesh = sm; scene.value.add(seedPeaksMesh) }
+
+  // Red larger dots = valid tree tops (after min_tree_points merge)
+  const pm = _buildPointsMesh(store.segmentationPeaks, 0xff2020, 10)
+  if (pm) { peaksMesh = pm; scene.value.add(peaksMesh) }
+}
+
+watch(() => store.segmentationPeaks,     _rebuildPeaksMeshes)
+watch(() => store.segmentationSeedPeaks, _rebuildPeaksMeshes)
+watch(() => store.viewMode, _rebuildPeaksMeshes)
 
 onMounted(async () => {
   document.addEventListener('click', onClickOutsideInference, true)
@@ -392,6 +438,8 @@ onMounted(async () => {
     store.elevFilterMin = result.zMin ?? 0
     store.elevFilterMax = result.zMax ?? 0
   }
+  // Store DTM grid for use in inference segmentation
+  store.dtmGrid = getDTMGrid()
 
   if (result?.center && camera.value) {
     const { center, positions } = result
@@ -431,7 +479,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', onClickOutsideInference, true)
   controls?.dispose()
-  if (peaksMesh) { peaksMesh.geometry.dispose(); peaksMesh.material.dispose() }
+  if (peaksMesh)     { peaksMesh.geometry.dispose();     peaksMesh.material.dispose() }
+  if (seedPeaksMesh) { seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose() }
   if (axisAnimId) cancelAnimationFrame(axisAnimId)
   axisRenderer?.dispose()
   dispose()
@@ -445,24 +494,52 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
 .loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #adf; font-size: 1.2rem; }
 
 .toolbar-overlay {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 8px; z-index: 10;
-  background: rgba(0,0,0,0.6); padding: 4px 6px; border-radius: 8px;
-  pointer-events: all;
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: stretch; gap: 0; z-index: 10;
+  background: rgba(6, 8, 20, 0.82); border: 1px solid #2a3550;
+  padding: 0; border-radius: 8px; pointer-events: all;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.5);
 }
-.btn-group { display: flex; gap: 3px; }
-.btn-group + .btn-group { border-left: 1px solid #445; padding-left: 8px; }
+
+/* Plain group — just a row of buttons */
+.btn-group {
+  display: flex; align-items: center; gap: 3px;
+  padding: 5px 8px;
+  border-right: 1px solid #1e2a40;
+}
+.btn-group:last-child { border-right: none; }
+
+/* Mode group — has a label above a row of buttons */
+.mode-group {
+  display: flex; flex-direction: column; align-items: flex-start;
+  padding: 3px 8px 5px;
+  position: relative;
+}
+.mode-label {
+  font-size: 9px; color: #445; text-transform: uppercase; letter-spacing: 0.6px;
+  margin-bottom: 4px; padding-left: 1px; user-select: none; white-space: nowrap;
+}
+.btn-row {
+  display: flex; gap: 3px; align-items: center; flex-wrap: nowrap;
+}
+
 .toolbar-overlay button {
-  background: #2a3a5a; color: #aac; border: 1px solid #445;
-  padding: 5px 12px; border-radius: 5px; cursor: pointer; font-size: 12px;
+  background: #1a2438; color: #8899bb; border: 1px solid #2a3a58;
+  padding: 4px 9px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  white-space: nowrap; transition: background 0.1s, color 0.1s;
 }
-.toolbar-overlay button.active { background: #3a5a8e; color: #fff; border-color: #7ab3ff; }
-.toolbar-overlay button:hover:not(.active) { background: #344; color: #eee; }
+.toolbar-overlay button.active {
+  background: #1e3d70; color: #c8dcff; border-color: #4a7adf;
+}
+.toolbar-overlay button:hover:not(.active):not(:disabled) {
+  background: #243050; color: #bbd;
+}
+.toolbar-overlay button:disabled { opacity: 0.35; cursor: default; }
 .toolbar-overlay kbd {
   display: inline-block; font-size: 9px; font-family: monospace;
-  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
-  border-radius: 3px; padding: 0 3px; margin-left: 3px;
-  line-height: 1.6; color: #aac; vertical-align: middle;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 3px; padding: 0 3px; margin-left: 2px;
+  line-height: 1.6; color: #667; vertical-align: middle;
 }
 
 .inference-dropdown-wrap { position: relative; }
@@ -488,7 +565,7 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
 .inference-menu button.active .inf-desc { color: #99c; }
 
 .no-ground-msg {
-  position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: 82px; left: 50%; transform: translateX(-50%);
   background: rgba(180, 80, 0, 0.85); color: #fff;
   padding: 8px 16px; border-radius: 6px; font-size: 12px;
   pointer-events: none; z-index: 20; white-space: nowrap;

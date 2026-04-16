@@ -29,11 +29,17 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const inferenceLabels     = ref(null)
   // Original 0/101 semantic labels from inference — never overwritten by segmentation
   const semanticLabels      = ref(null)
-  // [[x,y,z], ...] tree-top positions from last segmentation
+  // [[x,y,z], ...] valid tree-top positions (after merge filter)
   const segmentationPeaks   = ref([])
+  // [[x,y,z], ...] ALL CHM local maxima used as watershed seeds (for visualisation)
+  const segmentationSeedPeaks = ref([])
 
   // Ground indices (class 2) — for Label GND+ button
   const groundIndices = ref([])
+
+  // DTM grid from point cloud view — passed to backend for CHM-based segmentation
+  // null when no class-2 ground points exist in the patch
+  const dtmGrid = ref(null)  // { grid: float[], rows, cols, xMin, yMin, xRange, yRange }
 
   // Z bounds of the loaded patch — for elevation filter slider
   const zBoundsMin = ref(0)
@@ -66,7 +72,9 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     inferenceLabels.value   = null
     semanticLabels.value    = null
     segmentationPeaks.value = []
+    segmentationSeedPeaks.value = []
     groundIndices.value = []
+    dtmGrid.value = null
     zBoundsMin.value = 0
     zBoundsMax.value = 0
     elevFilterMin.value = 0
@@ -79,8 +87,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     protectClasses, showAllLabels,
     predicting, segmenting, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion,
-    segmentationPeaks,
-    groundIndices, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    segmentationPeaks, segmentationSeedPeaks,
+    groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     addAppliedLabel, reset,
   }
 })

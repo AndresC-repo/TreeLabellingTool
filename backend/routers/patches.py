@@ -160,14 +160,22 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         )
 
     try:
-        new_labels, tree_count, peaks = segment_tree_instances(
+        new_labels, tree_count, peaks, seed_peaks = segment_tree_instances(
             x, y, z, labels_in, cls,
             cell_size=req.cell_size,
+            smooth_window=req.smooth_window,
             smooth_sigma=req.smooth_sigma,
             min_height=req.min_height,
             min_distance=req.min_distance,
             max_radius=req.max_radius,
             min_tree_points=req.min_tree_points,
+            dtm_grid=req.dtm_grid,
+            dtm_rows=req.dtm_rows,
+            dtm_cols=req.dtm_cols,
+            dtm_x_min=req.dtm_x_min,
+            dtm_y_min=req.dtm_y_min,
+            dtm_x_range=req.dtm_x_range,
+            dtm_y_range=req.dtm_y_range,
         )
     except Exception as e:
         raise HTTPException(500, f"Segmentation error: {e}")
@@ -176,6 +184,7 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         labels=new_labels.tolist(),
         tree_count=tree_count,
         peaks=peaks.tolist(),
+        seed_peaks=seed_peaks.tolist(),
     )
 
 
