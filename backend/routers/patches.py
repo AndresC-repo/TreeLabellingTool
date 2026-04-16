@@ -59,20 +59,38 @@ def get_patch_points(session_id: str, patch_id: str):
     x = np.array(las.x, dtype=np.float32)
     y = np.array(las.y, dtype=np.float32)
     z = np.array(las.z, dtype=np.float32)
-    # Use full int32 label dim if present (supports values > 255)
-    if "label" in las.point_format.extra_dimension_names:
-        classification = np.array(las.label, dtype=np.int32)
-    else:
-        classification = np.array(las.classification, dtype=np.int32)
-    rgb = elevation_to_rgb(z).astype(np.float32)
 
-    # Binary layout: [x, y, z, r, g, b, classification] — 7 float32 per point
-    out = np.empty((len(x), 7), dtype=np.float32)
+    # Prefer in-memory labels (reflect any labeling done this session) over the LAS file.
+    # If state is missing (e.g. after a server restart), auto-initialize from the LAS file
+    # so that labeling works immediately without requiring a re-extraction.
+    in_memory = lm.get_labels(patch_id)
+    if in_memory is not None:
+        classification = in_memory.astype(np.int32)
+    else:
+        # original ASPRS classification — always the unmodified field from the LAS file
+        orig_cls = np.array(las.classification, dtype=np.int32)
+        # current labels — prefer saved int32 'label' dim, fall back to classification
+        if "label" in las.point_format.extra_dimension_names:
+            classification = np.array(las.label, dtype=np.int32)
+        else:
+            classification = orig_cls.copy()
+        # Re-initialize the label manager so subsequent label/save calls work.
+        # Pass orig_cls separately so protect-classes filtering uses the real ASPRS codes
+        # even for patches that were previously saved with custom labels.
+        lm.init_patch(patch_id, orig_cls, current_labels=classification)
+    rgb = elevation_to_rgb(z).astype(np.float32)
+    # Original ASPRS classification — always from las.classification (never overwritten by labelling).
+    # Sent as field 8 so the frontend can show the original scan structure in "show only <100" mode.
+    orig_asprs = np.array(las.classification, dtype=np.float32)
+
+    # Binary layout: [x, y, z, r, g, b, current_label, orig_classification] — 8 float32 per point
+    out = np.empty((len(x), 8), dtype=np.float32)
     out[:, 0] = x
     out[:, 1] = y
     out[:, 2] = z
     out[:, 3:6] = rgb
     out[:, 6] = classification.astype(np.float32)
+    out[:, 7] = orig_asprs
     buf = out.tobytes()
 
     return Response(
@@ -92,7 +110,7 @@ def label_points(session_id: str, patch_id: str, req: LabelRequest):
     if not req.point_indices:
         raise HTTPException(400, "point_indices must not be empty")
     try:
-        result = lm.apply_label(patch_id, req.point_indices, req.label_value)
+        result = lm.apply_label(patch_id, req.point_indices, req.label_value, req.protect_classes)
     except IndexError as e:
         raise HTTPException(400, str(e))
     return LabelResponse(**result)
@@ -142,18 +160,23 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         )
 
     try:
-        new_labels, tree_count = segment_tree_instances(
+        new_labels, tree_count, peaks = segment_tree_instances(
             x, y, z, labels_in, cls,
             cell_size=req.cell_size,
             smooth_sigma=req.smooth_sigma,
             min_height=req.min_height,
             min_distance=req.min_distance,
             max_radius=req.max_radius,
+            min_tree_points=req.min_tree_points,
         )
     except Exception as e:
         raise HTTPException(500, f"Segmentation error: {e}")
 
-    return SegmentTreesResponse(labels=new_labels.tolist(), tree_count=tree_count)
+    return SegmentTreesResponse(
+        labels=new_labels.tolist(),
+        tree_count=tree_count,
+        peaks=peaks.tolist(),
+    )
 
 
 @router.get("/{session_id}/{patch_id}/next-label")

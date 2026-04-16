@@ -27,6 +27,7 @@ class ExtractionResponse(BaseModel):
 class LabelRequest(BaseModel):
     point_indices: List[int]
     label_value: int
+    protect_classes: bool = True   # if True, skip ASPRS class 2 (ground) and 6 (building)
 
 class LabelResponse(BaseModel):
     label_value: int
@@ -51,7 +52,9 @@ class SegmentTreesRequest(BaseModel):
     min_height: float = 3.0
     min_distance: int = 10
     max_radius: float = 15.0
+    min_tree_points: int = 500
 
 class SegmentTreesResponse(BaseModel):
-    labels: List[int]            # per-point instance labels (0=non-tree, 201+=instances)
+    labels: List[int]              # per-point instance labels (0=non-tree, 201+=instances)
     tree_count: int
+    peaks: List[List[float]]       # [[x, y, z], ...] — world coords of each tree top

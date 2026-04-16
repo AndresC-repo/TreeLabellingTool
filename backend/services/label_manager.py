@@ -21,11 +21,24 @@ def get_patch_number(patch_id: str) -> int:
     return _patch_number_map.get(patch_id, 0)
 
 
-def init_patch(patch_id: str, original_classification: np.ndarray) -> None:
-    """Initialize label state for a newly extracted patch."""
+def init_patch(
+    patch_id: str,
+    original_classification: np.ndarray,
+    current_labels: "np.ndarray | None" = None,
+) -> None:
+    """Initialize label state for a patch.
+
+    original_classification: the raw ASPRS classification from the LAS file —
+        used as the immutable reference for protect-classes filtering.
+    current_labels: the labels to start with (e.g. previously applied labels
+        loaded from a saved file). Defaults to original_classification.
+    """
+    orig = original_classification.astype(np.int32)
+    labels = current_labels.astype(np.int32) if current_labels is not None else orig.copy()
     _state[patch_id] = {
-        "labels": original_classification.copy().astype(np.int32),
-        "used": {int(v) for v in np.unique(original_classification) if v != 0},
+        "labels":   labels,
+        "orig_cls": orig,          # immutable reference — used for protect-classes filtering
+        "used": {int(v) for v in np.unique(labels) if v != 0},
     }
 
 
@@ -37,14 +50,31 @@ def get_next_label(patch_id: str) -> int:
     return max(state["used"]) + 1
 
 
-def apply_label(patch_id: str, indices: list[int], label_value: int) -> dict:
-    """Apply label_value to the given point indices. Returns label statistics."""
+_PROTECTED_CLASSES = frozenset({2, 6})   # ASPRS ground, building
+
+
+def apply_label(
+    patch_id: str,
+    indices: list[int],
+    label_value: int,
+    protect_classes: bool = True,
+) -> dict:
+    """Apply label_value to the given point indices. Returns label statistics.
+
+    When protect_classes is True, points whose *original* ASPRS classification
+    is 2 (ground) or 6 (building) are silently skipped.
+    """
     state = _state[patch_id]
     label_len = len(state["labels"])
     if indices and max(indices) >= label_len:
         raise IndexError(
             f"Index {max(indices)} out of range for patch with {label_len} points"
         )
+
+    if protect_classes and "orig_cls" in state:
+        orig = state["orig_cls"]
+        indices = [i for i in indices if orig[i] not in _PROTECTED_CLASSES]
+
     state["labels"][indices] = label_value
     if label_value != 0:
         state["used"].add(label_value)

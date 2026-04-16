@@ -49,6 +49,13 @@
         <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
       </div>
     </div>
+    <!-- No ground points warning (DTM / CHM mode) -->
+    <div
+      v-if="(store.viewMode === 'dtm' || store.viewMode === 'chm') && !pc3d.dtmAvailable.value"
+      class="no-ground-msg"
+    >
+      No ground points (class 2) found — label ground points first to enable DTM / CHM
+    </div>
     <!-- Elevation Z filter slider (only in elevation view) -->
     <ElevationFilter
       v-if="store.viewMode === 'elevation'"
@@ -89,7 +96,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
+const { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -115,6 +122,7 @@ function onClickOutsideInference(e) {
 }
 
 let controls = null
+let peaksMesh = null
 let axisRenderer = null
 let axisScene = null
 let axisCamera = null
@@ -218,8 +226,11 @@ watch(() => store.viewMode, mode => setViewMode(mode))
 // React to a label being applied (from LabelPanel)
 watch(() => store.lastApplied, applied => {
   if (!applied) return
-  applyLabelColor(applied.indices, applied.labelValue)
+  applyLabelColor(applied.indices, applied.labelValue, applied.protectClasses ?? false)
 })
+
+// React to showAllLabels toggle — rebuild classification colors
+watch(() => store.showAllLabels, v => rebuildClassificationColors(v))
 
 async function onLassoFinish() {
   const positions = getPositions()
@@ -267,13 +278,15 @@ async function runPrediction(version = 'v1') {
   if (store.predicting) return
   store.predicting = true
   store.inferenceVersion = version
+  store.segmentationPeaks = []   // clear previous peaks when re-running inference
   try {
     const res = await predictPatch(route.params.id, route.params.patchId, version)
     const labels = res.data.labels
     applyPredictionColors(labels)
     store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
     store.hasPrediction = true
-    store.inferenceLabels = labels  // keep raw array for "Apply to Labels"
+    store.inferenceLabels = labels  // current display labels (may be overwritten by segmentation)
+    store.semanticLabels  = labels  // original 0/101 labels — never overwritten by segmentation
 
     // Build legend: count occurrences of each label
     const counts = {}
@@ -304,8 +317,8 @@ async function onGndBelow() {
   }
   if (!indices.length) return
   try {
-    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: 0 })
-    store.lastApplied = { indices, labelValue: 0 }
+    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: 0, protect_classes: store.protectClasses })
+    store.lastApplied = { indices, labelValue: 0, protectClasses: store.protectClasses }
     store.viewMode = 'classification'
     view2d.markLabelled(route.params.patchId)
   } catch (err) { console.error('GND below failed:', err) }
@@ -324,8 +337,8 @@ async function onLabelInside() {
   }
   if (!indices.length) return
   try {
-    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: lv })
-    store.lastApplied = { indices, labelValue: lv }
+    await labelPoints(route.params.id, route.params.patchId, { point_indices: indices, label_value: lv, protect_classes: store.protectClasses })
+    store.lastApplied = { indices, labelValue: lv, protectClasses: store.protectClasses }
     store.addAppliedLabel(lv)
     store.viewMode = 'classification'
     view2d.markLabelled(route.params.patchId)
@@ -340,6 +353,32 @@ async function onLabelInside() {
 watch(() => [store.elevFilterMin, store.elevFilterMax], ([lo, hi]) => {
   setElevationFilter(lo, hi)
 })
+
+// ── Segmentation peaks — red dot markers ─────────────────────────────────────
+
+function _rebuildPeaksMesh(peaks) {
+  if (peaksMesh) {
+    scene.value.remove(peaksMesh)
+    peaksMesh.geometry.dispose()
+    peaksMesh.material.dispose()
+    peaksMesh = null
+  }
+  if (!peaks?.length || store.viewMode !== 'prediction') return
+
+  const pos = new Float32Array(peaks.length * 3)
+  peaks.forEach(([px, py, pz], i) => {
+    pos[i * 3] = px; pos[i * 3 + 1] = py; pos[i * 3 + 2] = pz
+  })
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  peaksMesh = new THREE.Points(geo, new THREE.PointsMaterial({
+    color: 0xff2020, size: 10, sizeAttenuation: false, depthTest: false,
+  }))
+  scene.value.add(peaksMesh)
+}
+
+watch(() => store.segmentationPeaks, _rebuildPeaksMesh)
+watch(() => store.viewMode, () => _rebuildPeaksMesh(store.segmentationPeaks))
 
 onMounted(async () => {
   document.addEventListener('click', onClickOutsideInference, true)
@@ -392,6 +431,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('click', onClickOutsideInference, true)
   controls?.dispose()
+  if (peaksMesh) { peaksMesh.geometry.dispose(); peaksMesh.material.dispose() }
   if (axisAnimId) cancelAnimationFrame(axisAnimId)
   axisRenderer?.dispose()
   dispose()
@@ -446,6 +486,14 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
 .inference-menu button.active { background: #3a5a8e; color: #fff; }
 .inf-desc { font-size: 10px; color: #667; font-weight: normal; }
 .inference-menu button.active .inf-desc { color: #99c; }
+
+.no-ground-msg {
+  position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
+  background: rgba(180, 80, 0, 0.85); color: #fff;
+  padding: 8px 16px; border-radius: 6px; font-size: 12px;
+  pointer-events: none; z-index: 20; white-space: nowrap;
+  border: 1px solid rgba(255, 140, 0, 0.6);
+}
 
 .axis-triad {
   position: absolute; bottom: 16px; left: 16px;

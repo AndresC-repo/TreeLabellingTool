@@ -15,6 +15,21 @@ const LABEL_PALETTE = [
   [0.5, 1, 0],    // chartreuse
 ]
 
+// ASPRS classification colors — mirrors backend/services/projection.py CLASSIFICATION_COLORS
+const ASPRS_COLORS = {
+  0:  [0.28, 0.28, 0.32],  // GND / Never classified
+  1:  [0.7,  0.7,  0.7],   // Unclassified
+  2:  [0.55, 0.27, 0.07],  // Ground (brown)
+  3:  [0.13, 0.55, 0.13],  // Low vegetation
+  4:  [0.0,  0.8,  0.0],   // Medium vegetation
+  5:  [0.0,  0.5,  0.0],   // High vegetation
+  6:  [1.0,  0.0,  0.0],   // Building (red)
+  7:  [1.0,  0.5,  0.0],   // Low point (noise)
+  9:  [0.0,  0.5,  1.0],   // Water
+  17: [0.8,  0.8,  1.0],   // Bridge deck
+  18: [1.0,  0.0,  1.0],   // High noise
+}
+
 function hue2rgb(p, q, t) {
   if (t < 0) t += 1; if (t > 1) t -= 1
   if (t < 1/6) return p + (q - p) * 6 * t
@@ -36,41 +51,25 @@ function paletteColor(labelValue) {
   return hslToRgb(hue, 0.85, 0.55)
 }
 
-// ── DTM color computation ─────────────────────────────────────────────────────
-// Only ground-classified (class 2) points are shown, colored by their own Z.
-// All other points are hidden (painted background color).
-function computeDTMColors(positions, classifications, count) {
-  // Collect ground point Z values for normalization
-  let zMin = Infinity, zMax = -Infinity
-  for (let i = 0; i < count; i++) {
-    if (Math.round(classifications[i]) !== 2) continue
-    const z = positions[i*3+2]
-    if (z < zMin) zMin = z
-    if (z > zMax) zMax = z
+// Returns color for a label value, respecting showAllLabels toggle.
+// - labels < 100: always use ASPRS color map
+// - labels >= 100: use palette when showAllLabels=true, gray when false
+function colorForLabel(labelValue, showAllLabels = true) {
+  if (labelValue <= 99) {
+    return ASPRS_COLORS[labelValue] ?? [0.55, 0.55, 0.55]
   }
-  const zRange = Math.max(zMax - zMin, 1e-6)
-
-  const colors = new Float32Array(count * 3)
-  for (let i = 0; i < count; i++) {
-    if (Math.round(classifications[i]) !== 2) {
-      // Hide non-ground points — match scene background
-      colors[i*3] = 0.1; colors[i*3+1] = 0.1; colors[i*3+2] = 0.18
-      continue
-    }
-    const t = (positions[i*3+2] - zMin) / zRange
-    colors[i*3]   = t < 1/3 ? 0          : t < 2/3 ? (t - 1/3) * 3 : 1
-    colors[i*3+1] = t < 1/3 ? t * 3      : t < 2/3 ? 1             : 1 - (t - 2/3) * 3
-    colors[i*3+2] = t < 1/3 ? 1 - t * 3 : 0
-  }
-  return colors
+  if (!showAllLabels) return [0.28, 0.28, 0.32]
+  return paletteColor(labelValue)
 }
 
-// ── CHM color computation ─────────────────────────────────────────────────────
-// Each point is colored by (Z − ground Z at its XY location).
-// Ground = classification 2. Falls back to global min Z if no ground exists.
-function computeCHMColors(positions, classifications, count) {
-  const GRID   = 64
-  const COARSE = 16
+// ── Terrain grid from class-2 (ASPRS ground) points ──────────────────────────
+// Returns null when no ground points exist.
+// Cells with no ground coverage are filled with the average Z of all ground points.
+function _buildGroundTerrain(positions, origCls, count) {
+  const GRID = 64
+  const BG_COLOR = [0.1, 0.1, 0.18]
+
+  // Collect bounding box over all points
   let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity
   for (let i = 0; i < count; i++) {
     const x = positions[i*3], y = positions[i*3+1]
@@ -80,74 +79,105 @@ function computeCHMColors(positions, classifications, count) {
   const xRange = Math.max(xMax - xMin, 1e-6)
   const yRange = Math.max(yMax - yMin, 1e-6)
 
-  // Fine DTM: min ground Z per cell
-  const minGnd = new Float32Array(GRID * GRID).fill(Infinity)
-  let globalGnd = Infinity
+  // Min Z per cell from ASPRS class-2 points; also track avg ground Z for fallback
+  const terrain = new Float32Array(GRID * GRID).fill(Infinity)
+  const hasCover = new Uint8Array(GRID * GRID)
+  let groundSum = 0, groundCount = 0
+
   for (let i = 0; i < count; i++) {
-    if (Math.round(classifications[i]) !== 2) continue
+    if (Math.round(origCls[i]) !== 2) continue
+    const gz = positions[i*3+2]
+    groundSum += gz
+    groundCount++
+    const cx = Math.min(((positions[i*3]   - xMin) / xRange * GRID) | 0, GRID - 1)
+    const cy = Math.min(((positions[i*3+1] - yMin) / yRange * GRID) | 0, GRID - 1)
+    const idx = cy * GRID + cx
+    if (gz < terrain[idx]) terrain[idx] = gz
+    hasCover[idx] = 1
+  }
+
+  if (groundCount === 0) return null
+
+  const avgGroundZ = groundSum / groundCount
+  for (let i = 0; i < GRID * GRID; i++) {
+    if (!hasCover[i]) terrain[i] = avgGroundZ
+  }
+
+  return { terrain, GRID, xMin, yMin, xRange, yRange, BG_COLOR }
+}
+
+// ── DTM color computation ─────────────────────────────────────────────────────
+// Shows only ASPRS class-2 (ground) points, colored by elevation.
+// Non-ground points get background color.
+// Returns null when no ground points exist.
+function computeDTMColors(positions, origCls, count) {
+  const grid = _buildGroundTerrain(positions, origCls, count)
+  if (!grid) return null
+
+  const { terrain, GRID, xMin, yMin, xRange, yRange, BG_COLOR } = grid
+
+  // Z range from ground points only
+  let zMin = Infinity, zMax = -Infinity
+  for (let i = 0; i < count; i++) {
+    if (Math.round(origCls[i]) !== 2) continue
     const z = positions[i*3+2]
-    if (z < globalGnd) globalGnd = z
-    const gx = Math.min((((positions[i*3]   - xMin) / xRange) * GRID) | 0, GRID - 1)
-    const gy = Math.min((((positions[i*3+1] - yMin) / yRange) * GRID) | 0, GRID - 1)
-    const idx = gy * GRID + gx
-    if (z < minGnd[idx]) minGnd[idx] = z
+    if (z < zMin) zMin = z
+    if (z > zMax) zMax = z
   }
-  if (globalGnd === Infinity) globalGnd = 0  // no ground points at all
+  const zRange = Math.max(zMax - zMin, 1e-6)
 
-  // Coarse DTM for gap-filling
-  const coarseGnd = new Float32Array(COARSE * COARSE).fill(Infinity)
+  const colors = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
-    if (Math.round(classifications[i]) !== 2) continue
-    const z  = positions[i*3+2]
-    const cx = Math.min((((positions[i*3]   - xMin) / xRange) * COARSE) | 0, COARSE - 1)
-    const cy = Math.min((((positions[i*3+1] - yMin) / yRange) * COARSE) | 0, COARSE - 1)
-    const idx = cy * COARSE + cx
-    if (z < coarseGnd[idx]) coarseGnd[idx] = z
-  }
-  for (let i = 0; i < COARSE * COARSE; i++) {
-    if (coarseGnd[i] === Infinity) coarseGnd[i] = globalGnd
-  }
-
-  // Merged ground grid: fine where available, coarse fallback elsewhere
-  const groundZ = new Float32Array(GRID * GRID)
-  for (let gy = 0; gy < GRID; gy++) {
-    for (let gx = 0; gx < GRID; gx++) {
-      const fine = minGnd[gy * GRID + gx]
-      if (fine !== Infinity) {
-        groundZ[gy * GRID + gx] = fine
-      } else {
-        const cy = Math.min((gy / GRID * COARSE) | 0, COARSE - 1)
-        const cx = Math.min((gx / GRID * COARSE) | 0, COARSE - 1)
-        groundZ[gy * GRID + gx] = coarseGnd[cy * COARSE + cx]
-      }
+    if (Math.round(origCls[i]) !== 2) {
+      // Non-ground → background (hidden)
+      colors[i*3] = BG_COLOR[0]; colors[i*3+1] = BG_COLOR[1]; colors[i*3+2] = BG_COLOR[2]
+      continue
     }
+    const t = (positions[i*3+2] - zMin) / zRange
+    // Blue (low) → green → red (high)
+    colors[i*3]   = t < 0.5 ? 0              : (t - 0.5) * 2
+    colors[i*3+1] = t < 0.5 ? t * 2          : 1 - (t - 0.5) * 2
+    colors[i*3+2] = t < 0.5 ? 1 - t * 2      : 0
   }
+  return colors
+}
 
-  // Height above ground per point
-  const heights = new Float32Array(count)
+// ── CHM color computation ─────────────────────────────────────────────────────
+// Shows non-ground points colored by height above terrain (Z − terrain[cell]).
+// Ground points (class 2) get background color.
+// Returns null when no ground points exist.
+function computeCHMColors(positions, origCls, count) {
+  const grid = _buildGroundTerrain(positions, origCls, count)
+  if (!grid) return null
+
+  const { terrain, GRID, xMin, yMin, xRange, yRange, BG_COLOR } = grid
+
+  // Height above terrain for non-ground points
   let maxH = 0
+  const heights = new Float32Array(count)
   for (let i = 0; i < count; i++) {
-    const gx = Math.min((((positions[i*3]   - xMin) / xRange) * GRID) | 0, GRID - 1)
-    const gy = Math.min((((positions[i*3+1] - yMin) / yRange) * GRID) | 0, GRID - 1)
-    const h  = Math.max(positions[i*3+2] - groundZ[gy * GRID + gx], 0)
+    if (Math.round(origCls[i]) === 2) continue
+    const cx = Math.min(((positions[i*3]   - xMin) / xRange * GRID) | 0, GRID - 1)
+    const cy = Math.min(((positions[i*3+1] - yMin) / yRange * GRID) | 0, GRID - 1)
+    const h  = Math.max(positions[i*3+2] - terrain[cy * GRID + cx], 0)
     heights[i] = h
     if (h > maxH) maxH = h
   }
   if (maxH < 1e-6) maxH = 1
 
-  // Color: dark green at 0 → bright yellow-green at max height
-  // Ground points (class 2) are hidden by painting them with the background color.
+  // Color: dark blue (at ground) → green → yellow (max height)
   const colors = new Float32Array(count * 3)
   for (let i = 0; i < count; i++) {
-    if (Math.round(classifications[i]) === 2) {
-      // Hide ground points — match scene background
-      colors[i*3] = 0.1; colors[i*3+1] = 0.1; colors[i*3+2] = 0.18
+    if (Math.round(origCls[i]) === 2) {
+      // Ground → background (hidden)
+      colors[i*3] = BG_COLOR[0]; colors[i*3+1] = BG_COLOR[1]; colors[i*3+2] = BG_COLOR[2]
       continue
     }
     const t = heights[i] / maxH
-    colors[i*3]   = t * 0.75           // R: 0 → 0.75
-    colors[i*3+1] = 0.25 + t * 0.75   // G: 0.25 → 1.0
-    colors[i*3+2] = 0                  // B: always 0
+    // Blue (ground level) → green → yellow (tallest)
+    colors[i*3]   = t < 0.5 ? 0          : (t - 0.5) * 2
+    colors[i*3+1] = t < 0.5 ? t * 2      : 1
+    colors[i*3+2] = t < 0.5 ? 1 - t * 2  : 0
   }
   return colors
 }
@@ -157,15 +187,18 @@ function computeCHMColors(positions, classifications, count) {
 export function usePointCloud3D(scene, sessionId, patchId) {
   const loading = ref(false)
   const pointCount = ref(0)
+  const dtmAvailable = ref(true)  // false when no class-2 ground points exist
   let pointsMesh = null
   let elevationColors = null      // original server colors (elevation), never modified
-  let classificationColors = null // per-point label colors (gray default → palette on label)
+  let classificationColors = null // per-point label colors (rebuilt from currentLabels)
   let dtmColors = null            // min-Z in local cell, elevation gradient
   let chmColors = null            // height above ground, green gradient
   let filteredElevationColors = null  // elevation colors with Z filter applied
   let predictionColors = null         // per-point NN predicted class colors
   let cachedPositions = null
   let cachedClassifications = null
+  let currentLabels = null        // Int32Array tracking the current label per point
+  let origAsprsClassifications = null // original ASPRS classification from LAS (never changes)
   let _zMin = 0, _zMax = 0       // Z bounds for filter
   let _filterLo = -Infinity, _filterHi = Infinity  // current filter bounds
   const viewMode = ref('elevation')
@@ -174,22 +207,28 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     loading.value = true
     try {
       const res = await getPatchPoints(sessionId, patchId)
-      const { positions, colors, classifications, count } = parse3DBuffer(res.data)
+      const { positions, colors, classifications, origClassifications, count } = parse3DBuffer(res.data)
       pointCount.value = count
       elevationColors = colors.slice()
 
-      // Classification colors start as dark gray (unlabeled)
+      // Classification colors — initialize from actual label values (showAllLabels=true by default)
+      currentLabels = new Int32Array(count)
       classificationColors = new Float32Array(count * 3)
-      for (let i = 0; i < count * 3; i += 3) {
-        classificationColors[i] = 0.28; classificationColors[i+1] = 0.28; classificationColors[i+2] = 0.32
+      for (let i = 0; i < count; i++) {
+        const lv = Math.round(classifications[i])
+        currentLabels[i] = lv
+        const [r, g, b] = colorForLabel(lv, true)
+        classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b
       }
 
-      // DTM and CHM computed from positions + classifications
-      dtmColors = computeDTMColors(positions, classifications, count)
-      chmColors = computeCHMColors(positions, classifications, count)
+      // DTM and CHM computed from positions + original ASPRS classifications (class 2 = ground)
+      dtmColors = computeDTMColors(positions, origClassifications, count)
+      chmColors = computeCHMColors(positions, origClassifications, count)
+      dtmAvailable.value = dtmColors !== null
 
       cachedPositions = positions
       cachedClassifications = classifications
+      origAsprsClassifications = origClassifications
 
       // Compute Z bounds from all points
       _zMin = Infinity; _zMax = -Infinity
@@ -227,8 +266,8 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function _activeColors() {
     if (viewMode.value === 'classification') return classificationColors
-    if (viewMode.value === 'dtm')            return dtmColors
-    if (viewMode.value === 'chm')            return chmColors
+    if (viewMode.value === 'dtm')            return dtmColors ?? classificationColors
+    if (viewMode.value === 'chm')            return chmColors ?? classificationColors
     if (viewMode.value === 'prediction')     return predictionColors ?? classificationColors
     // elevation mode — return filtered version if a filter is active
     return filteredElevationColors ?? elevationColors
@@ -289,13 +328,45 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     attr.needsUpdate = true
   }
 
-  function applyLabelColor(indices, labelValue) {
+  function applyLabelColor(indices, labelValue, protectClasses = false) {
     const [r, g, b] = paletteColor(labelValue)
     for (const i of indices) {
+      // Mirror backend protect-classes logic: skip ASPRS class 2 (ground) and 6 (building).
+      // Use origAsprsClassifications (true ASPRS from LAS file) so protect logic works even
+      // after custom labels have been applied on top.
+      if (protectClasses && origAsprsClassifications) {
+        const origCls = Math.round(origAsprsClassifications[i])
+        if (origCls === 2 || origCls === 6) continue
+      }
+      if (currentLabels) currentLabels[i] = labelValue
       classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b
     }
     viewMode.value = 'classification'
     _applyToMesh(classificationColors)
+  }
+
+  // Rebuild classification colors from current label state, respecting showAllLabels toggle.
+  // showAllLabels=true:  color all currentLabels with full palette (101+=custom colors).
+  // showAllLabels=false: only color currentLabels that are <100; anything >=100 turns gray.
+  function rebuildClassificationColors(showAllLabels = true) {
+    if (!currentLabels || !classificationColors) return
+    const count = pointCount.value
+    for (let i = 0; i < count; i++) {
+      const lv = currentLabels[i]
+      let r, g, b
+      if (showAllLabels) {
+        ;[r, g, b] = colorForLabel(lv, true)
+      } else {
+        // OFF: gray out labels <100 (ASPRS/original), keep >=100 in their palette colors
+        if (lv < 100) {
+          r = 0.28; g = 0.28; b = 0.32
+        } else {
+          ;[r, g, b] = paletteColor(lv)
+        }
+      }
+      classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b
+    }
+    if (viewMode.value === 'classification') _applyToMesh(classificationColors)
   }
 
   function resetColors() {
@@ -315,5 +386,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
 
-  return { load, loading, pointCount, highlightIndices, applyLabelColor, applyPredictionColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
+  return { load, loading, pointCount, dtmAvailable, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
 }

@@ -13,6 +13,11 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const viewMode = ref('elevation')
   const lastApplied = ref(null)   // { indices: number[], labelValue: number }
 
+  // Label protection setting — persists across patches in the session
+  const protectClasses    = ref(true)   // when true, skip ASPRS class 2 & 6 when labeling
+  // Classification view setting — persists across patches in the session
+  const showAllLabels     = ref(true)   // when true, color all labels; false = only ASPRS < 100
+
   // Prediction state
   const predicting        = ref(false)
   const segmenting        = ref(false)
@@ -21,7 +26,11 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   // [{ label: number, name: string, color: string, count: number }]
   const predictionLegend = ref([])
   // Raw per-point label array from last inference (Int32Array or plain array)
-  const inferenceLabels  = ref(null)
+  const inferenceLabels     = ref(null)
+  // Original 0/101 semantic labels from inference — never overwritten by segmentation
+  const semanticLabels      = ref(null)
+  // [[x,y,z], ...] tree-top positions from last segmentation
+  const segmentationPeaks   = ref([])
 
   // Ground indices (class 2) — for Label GND+ button
   const groundIndices = ref([])
@@ -53,8 +62,10 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     segmenting.value = false
     hasPrediction.value = false
     inferenceVersion.value = 'v1'
-    predictionLegend.value = []
-    inferenceLabels.value  = null
+    predictionLegend.value  = []
+    inferenceLabels.value   = null
+    semanticLabels.value    = null
+    segmentationPeaks.value = []
     groundIndices.value = []
     zBoundsMin.value = 0
     zBoundsMax.value = 0
@@ -65,7 +76,10 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   return {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
-    predicting, segmenting, hasPrediction, predictionLegend, inferenceLabels, inferenceVersion,
+    protectClasses, showAllLabels,
+    predicting, segmenting, hasPrediction, predictionLegend,
+    inferenceLabels, semanticLabels, inferenceVersion,
+    segmentationPeaks,
     groundIndices, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     addAppliedLabel, reset,
   }

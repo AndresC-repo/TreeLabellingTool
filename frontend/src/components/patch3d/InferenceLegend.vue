@@ -8,16 +8,26 @@
       <span class="cnt">{{ e.count.toLocaleString() }}</span>
     </div>
 
-    <!-- Segment button — only shown while label 101 (semantic tree) exists -->
-    <button
-      v-if="hasTreeLabel"
-      class="segment-btn"
-      :disabled="store.segmenting || applying"
-      @click="runSegmentation"
-      title="Cluster tree points into individual instances using CHM local maxima"
-    >
-      {{ store.segmenting ? 'Segmenting…' : 'Segment Tree Instances' }}
-    </button>
+    <!-- Segment controls — only shown while label 101 (semantic tree) exists -->
+    <div v-if="hasTreeLabel" class="segment-controls">
+      <label class="param-label">
+        Min points/tree
+        <input
+          v-model.number="minTreePoints"
+          type="number" min="1" step="100"
+          class="param-input"
+          title="Instances with fewer points are merged into the nearest valid tree"
+        />
+      </label>
+      <button
+        class="segment-btn"
+        :disabled="store.segmenting || applying"
+        @click="runSegmentation"
+        title="Cluster tree points into individual instances using CHM local maxima"
+      >
+        {{ store.segmenting ? 'Segmenting…' : 'Segment Tree Instances' }}
+      </button>
+    </div>
     <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
 
     <button
@@ -50,12 +60,11 @@ const versionLabel = computed(() => VERSION_LABELS[store.inferenceVersion] ?? ''
 const applying        = ref(false)
 const applied         = ref(false)
 const instanceMessage = ref('')
+const minTreePoints   = ref(500)
 
-// Show segment button only when label 101 (semantic tree) is present.
-// It disappears after segmentation runs because 101 is replaced by 201+.
-const hasTreeLabel = computed(() =>
-  store.predictionLegend.some(e => e.label === 101)
-)
+// Show segment controls as long as we have inference data.
+// Stays visible after segmentation so the user can adjust min_tree_points and re-run.
+const hasTreeLabel = computed(() => store.inferenceLabels !== null)
 
 // Mirrors paletteColor() in usePointCloud3D.js / _paletteHex() in CanvasRenderer3D.vue
 function _paletteHex(labelValue) {
@@ -82,7 +91,7 @@ function _paletteHex(labelValue) {
 }
 
 async function runSegmentation() {
-  if (!store.inferenceLabels || store.segmenting) return
+  if (!store.semanticLabels || store.segmenting) return
   store.segmenting = true
   instanceMessage.value = ''
   applied.value = false
@@ -90,11 +99,13 @@ async function runSegmentation() {
     const res = await segmentTrees(
       route.params.id,
       route.params.patchId,
-      Array.from(store.inferenceLabels),  // ensure plain Array for JSON serialisation
+      Array.from(store.semanticLabels),   // always use original 0/101 labels, not instance IDs
+      { min_tree_points: minTreePoints.value },
     )
     const { labels, tree_count } = res.data
 
-    store.inferenceLabels = labels
+    store.inferenceLabels   = labels
+    store.segmentationPeaks = res.data.peaks
 
     // Rebuild legend with instance entries
     const counts = {}
@@ -165,8 +176,18 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .cnt { color: #556; font-size: 11px; white-space: nowrap; }
 .hint { font-size: 12px; color: #556; }
 .ver { font-size: 11px; color: #778; font-weight: normal; }
+.segment-controls { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.param-label {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: #88a;
+}
+.param-input {
+  width: 72px; background: #1e2840; color: #eee;
+  border: 1px solid #445; border-radius: 4px;
+  padding: 3px 6px; font-size: 11px; text-align: right;
+}
 .segment-btn {
-  margin-top: 10px; width: 100%; padding: 8px;
+  width: 100%; padding: 8px;
   background: #1a4a2e; border: 1px solid #3a8a4e;
   border-radius: 5px; color: #afd; cursor: pointer; font-size: 12px;
 }

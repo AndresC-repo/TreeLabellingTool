@@ -1,6 +1,27 @@
 <template>
   <div class="label-panel">
-    <h3>Label</h3>
+    <div class="panel-header">
+      <h3>Label</h3>
+      <button
+        class="gear-btn"
+        :class="{ active: settingsOpen }"
+        @click="settingsOpen = !settingsOpen"
+        title="Label settings"
+      >⚙</button>
+    </div>
+
+    <!-- Settings drawer -->
+    <div v-if="settingsOpen" class="settings-drawer">
+      <label class="setting-row">
+        <input type="checkbox" v-model="store.protectClasses" />
+        <span>Skip ground &amp; buildings (class 2 / 6)</span>
+      </label>
+      <label class="setting-row">
+        <input type="checkbox" v-model="store.showAllLabels" />
+        <span>Show all labels (incl. ASPRS &lt;100)</span>
+      </label>
+    </div>
+
     <div class="label-control">
       <button class="step-btn" @click="decrement">−</button>
       <input v-model.number="labelValue" type="number" min="0" />
@@ -8,6 +29,7 @@
     </div>
     <p class="hint" v-if="store.selectedIndices.length > 0">
       {{ store.selectedIndices.length.toLocaleString() }} points selected
+      <span v-if="store.protectClasses" class="protect-note">(2/6 protected)</span>
     </p>
     <p class="hint faint" v-else-if="!store.lassoProcessing">Draw a lasso to select points</p>
     <button
@@ -42,8 +64,8 @@ const view2d = useView2DStore()
 const route = useRoute()
 const labelValue = ref(store.nextLabel)
 const applying = ref(false)
+const settingsOpen = ref(false)
 
-// Keep in sync with store (lasso updates store.nextLabel after each apply)
 watch(() => store.nextLabel, v => { labelValue.value = v })
 
 function increment() { labelValue.value++ }
@@ -58,11 +80,11 @@ async function applyGnd() {
     await labelPoints(route.params.id, route.params.patchId, {
       point_indices: Array.from(store.selectedIndices),
       label_value: 0,
+      protect_classes: store.protectClasses,
     })
-    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: 0 }
+    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: 0, protectClasses: store.protectClasses }
     store.viewMode = 'classification'
     view2d.markLabelled(route.params.patchId)
-    // 0 is intentionally not added to appliedLabels (excluded from filename)
     store.selectedIndices = []
   } catch (err) {
     console.error('GND label failed:', err)
@@ -78,9 +100,9 @@ async function applyLabel() {
     await labelPoints(route.params.id, route.params.patchId, {
       point_indices: Array.from(store.selectedIndices),
       label_value: labelValue.value,
+      protect_classes: store.protectClasses,
     })
-    // Signal the canvas to recolor + switch view before clearing selection
-    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: labelValue.value }
+    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: labelValue.value, protectClasses: store.protectClasses }
     store.viewMode = 'classification'
     store.addAppliedLabel(labelValue.value)
     view2d.markLabelled(route.params.patchId)
@@ -94,20 +116,44 @@ async function applyLabel() {
     applying.value = false
   }
 }
-
 </script>
 
 <style scoped>
 .label-panel { color: #eee; }
-h3 { color: #adf; margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+h3 { color: #adf; font-size: 14px; font-weight: 600; margin: 0; }
+
+.gear-btn {
+  background: none; border: 1px solid transparent;
+  color: #778; font-size: 15px; cursor: pointer;
+  border-radius: 4px; padding: 2px 5px; line-height: 1;
+  transition: color 0.15s, border-color 0.15s;
+}
+.gear-btn:hover  { color: #adf; border-color: #445; }
+.gear-btn.active { color: #adf; border-color: #4a7aae; background: #1a2a3e; }
+
+.settings-drawer {
+  background: #131828; border: 1px solid #334;
+  border-radius: 5px; padding: 8px 10px; margin-bottom: 10px;
+}
+.setting-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: #aac; cursor: pointer;
+}
+.setting-row input[type="checkbox"] { accent-color: #7ab3ff; cursor: pointer; }
+
 .label-control { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-input {
+input[type="number"] {
   width: 80px; text-align: center;
   background: #2a2a4e; color: #eee;
   border: 1px solid #556; padding: 6px;
   border-radius: 4px; font-size: 16px;
 }
-input::-webkit-inner-spin-button { opacity: 0.5; }
+input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
 .step-btn {
   background: #2a2a4e; color: #eee;
   border: 1px solid #445;
@@ -133,6 +179,7 @@ input::-webkit-inner-spin-button { opacity: 0.5; }
 .gnd-btn:disabled { opacity: 0.4; cursor: default; }
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
+.protect-note { color: #668; font-size: 11px; }
 kbd {
   display: inline-block; font-size: 9px; font-family: monospace;
   background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
