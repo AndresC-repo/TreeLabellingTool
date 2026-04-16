@@ -57,3 +57,17 @@ export const applyLabelsBulk = (sessionId, patchId, labels) =>
 
 export const segmentTrees = (sessionId, patchId, labels, params = {}) =>
   api.post(`/patches/${sessionId}/${patchId}/segment-trees`, { labels, ...params })
+
+export const getTreeMetrics = (sessionId, patchId, labels, cell_size, dtmGrid) => {
+  const payload = { labels, cell_size }
+  if (dtmGrid) {
+    payload.dtm_grid   = dtmGrid.grid
+    payload.dtm_rows   = dtmGrid.rows
+    payload.dtm_cols   = dtmGrid.cols
+    payload.dtm_x_min  = dtmGrid.xMin
+    payload.dtm_y_min  = dtmGrid.yMin
+    payload.dtm_x_range = dtmGrid.xRange
+    payload.dtm_y_range = dtmGrid.yRange
+  }
+  return api.post(`/patches/${sessionId}/${patchId}/tree-metrics`, payload)
+}

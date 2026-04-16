@@ -96,6 +96,47 @@
 
     <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
 
+    <!-- Crown metrics -->
+    <button
+      v-if="store.segmentationPeaks.length"
+      class="metrics-btn"
+      :disabled="metricsLoading"
+      @click="runMetrics"
+    >{{ metricsLoading ? 'Calculating…' : 'Calculate Crown Metrics' }}</button>
+
+    <div v-if="treeMetrics.length" class="metrics-section">
+      <div class="metrics-header">
+        <span>Crown metrics — {{ treeMetrics.length }} trees</span>
+        <button class="metrics-close" @click="treeMetrics = []">✕</button>
+      </div>
+      <div class="metrics-scroll">
+        <table class="metrics-table">
+          <thead>
+            <tr>
+              <th title="Tree instance number">#</th>
+              <th title="Maximum height above terrain (m)">Ht (m)</th>
+              <th title="Estimated crown base height (m)">Hb (m)</th>
+              <th title="Live crown length: Ht − Hb (m)">Lc (m)</th>
+              <th title="Mean crown width: average of E-W and N-S extents (m)">CW (m)</th>
+              <th title="Crown footprint area (m²)">CA (m²)</th>
+              <th title="Number of LiDAR points in the tree">Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in treeMetrics" :key="t.id">
+              <td>{{ t.id - 200 }}</td>
+              <td>{{ t.height }}</td>
+              <td>{{ t.base_height }}</td>
+              <td>{{ t.crown_length }}</td>
+              <td>{{ t.crown_width }}</td>
+              <td>{{ t.crown_area }}</td>
+              <td>{{ t.point_count.toLocaleString() }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <button
       v-if="store.predictionLegend.length"
       class="apply-btn"
@@ -113,7 +154,7 @@
 import { ref, computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
-import { applyLabelsBulk, segmentTrees } from '../../api/client.js'
+import { applyLabelsBulk, segmentTrees, getTreeMetrics } from '../../api/client.js'
 
 const emit = defineEmits(['segment-done'])
 
@@ -128,6 +169,8 @@ const applied         = ref(false)
 const instanceMessage = ref('')
 const paramsOpen      = ref(false)
 const helpOpen        = ref(false)
+const metricsLoading  = ref(false)
+const treeMetrics     = ref([])
 
 // Segmentation hyperparameters — all editable via UI
 const params = reactive({
@@ -237,6 +280,25 @@ async function runSegmentation() {
     instanceMessage.value = 'Segmentation failed — see console'
   } finally {
     store.segmenting = false
+  }
+}
+
+async function runMetrics() {
+  if (!store.inferenceLabels || metricsLoading.value) return
+  metricsLoading.value = true
+  try {
+    const res = await getTreeMetrics(
+      route.params.id,
+      route.params.patchId,
+      Array.from(store.inferenceLabels),
+      params.cell_size,
+      store.dtmGrid || null,
+    )
+    treeMetrics.value = res.data.trees
+  } catch (err) {
+    console.error('Crown metrics failed:', err)
+  } finally {
+    metricsLoading.value = false
   }
 }
 
@@ -374,4 +436,47 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 
 .info-msg { margin-top: 6px; font-size: 11px; color: #8cf; }
 .ok { margin-top: 6px; font-size: 11px; color: #6c6; }
+
+/* ── Crown metrics ────────────────────────────────────────────── */
+.metrics-btn {
+  margin-top: 6px; width: 100%; padding: 7px;
+  background: #1a3a4a; border: 1px solid #3a7a9a;
+  border-radius: 5px; color: #9df; cursor: pointer; font-size: 12px;
+}
+.metrics-btn:hover:not(:disabled) { background: #2a5a6a; }
+.metrics-btn:disabled { opacity: 0.4; cursor: default; }
+
+.metrics-section {
+  margin-top: 8px;
+  background: #0a1020; border: 1px solid #2a3050;
+  border-radius: 5px; overflow: hidden;
+}
+.metrics-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 8px; background: #111828;
+  font-size: 11px; color: #99c;
+}
+.metrics-close {
+  background: none; border: none; color: #556; cursor: pointer;
+  font-size: 11px; padding: 0 2px; line-height: 1;
+}
+.metrics-close:hover { color: #aac; }
+.metrics-scroll { overflow-x: auto; max-height: 220px; overflow-y: auto; }
+.metrics-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 10px; color: #ccd;
+}
+.metrics-table th {
+  position: sticky; top: 0;
+  background: #151e30; color: #889; font-weight: 600;
+  padding: 4px 5px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid #2a3050; cursor: help;
+}
+.metrics-table th:first-child { text-align: center; }
+.metrics-table td {
+  padding: 3px 5px; text-align: right;
+  border-bottom: 1px solid #161e2e;
+}
+.metrics-table td:first-child { text-align: center; color: #99c; font-weight: 600; }
+.metrics-table tbody tr:hover { background: #141c2c; }
 </style>

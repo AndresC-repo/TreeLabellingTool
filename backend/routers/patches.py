@@ -4,7 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -187,6 +187,46 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         peaks=peaks.tolist(),
         seed_peaks=seed_peaks.tolist(),
     )
+
+
+@router.post("/{session_id}/{patch_id}/tree-metrics", response_model=TreeMetricsResponse)
+def tree_metrics(session_id: str, patch_id: str, req: TreeMetricsRequest):
+    """Compute per-tree crown metrics (height, crown width, area, etc.) from instance labels."""
+    from services.tree_metrics import compute_tree_metrics
+
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+
+    try:
+        las = laspy.read(str(patch_path))
+        x   = np.array(las.x,              dtype=np.float32)
+        y   = np.array(las.y,              dtype=np.float32)
+        z   = np.array(las.z,              dtype=np.float32)
+        cls = np.array(las.classification, dtype=np.int32)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read patch: {e}")
+
+    labels_in = np.array(req.labels, dtype=np.int32)
+    if len(labels_in) != len(x):
+        raise HTTPException(400, f"Label count {len(labels_in)} != point count {len(x)}")
+
+    try:
+        metrics = compute_tree_metrics(
+            x, y, z, labels_in, cls,
+            cell_size=req.cell_size,
+            dtm_grid=req.dtm_grid,
+            dtm_rows=req.dtm_rows,
+            dtm_cols=req.dtm_cols,
+            dtm_x_min=req.dtm_x_min,
+            dtm_y_min=req.dtm_y_min,
+            dtm_x_range=req.dtm_x_range,
+            dtm_y_range=req.dtm_y_range,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Metrics error: {e}")
+
+    return TreeMetricsResponse(trees=metrics)
 
 
 @router.get("/{session_id}/{patch_id}/next-label")

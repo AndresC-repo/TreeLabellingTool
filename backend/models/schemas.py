@@ -70,3 +70,28 @@ class SegmentTreesResponse(BaseModel):
     tree_count: int
     peaks: List[List[float]]       # [[x, y, z], ...] — valid tree tops (after merge filter)
     seed_peaks: List[List[float]]  # [[x, y, z], ...] — ALL CHM local maxima (watershed seeds)
+
+class TreeMetricsRequest(BaseModel):
+    labels: List[int]              # per-point instance labels (201+=instances)
+    cell_size: float = 1.0
+    dtm_grid: Optional[List[float]] = None
+    dtm_rows: int = 64
+    dtm_cols: int = 64
+    dtm_x_min: float = 0.0
+    dtm_y_min: float = 0.0
+    dtm_x_range: float = 1.0
+    dtm_y_range: float = 1.0
+
+class TreeMetrics(BaseModel):
+    id: int
+    height: float         # Ht — max height above terrain (m)
+    base_height: float    # Hb — estimated crown base height (m)
+    crown_length: float   # Lc — live crown length = Ht − Hb (m)
+    width_ew: float       # E-W crown extent (m)
+    width_ns: float       # N-S crown extent (m)
+    crown_width: float    # mean of E-W and N-S (m)
+    crown_area: float     # footprint area (m²)
+    point_count: int
+
+class TreeMetricsResponse(BaseModel):
+    trees: List[TreeMetrics]
