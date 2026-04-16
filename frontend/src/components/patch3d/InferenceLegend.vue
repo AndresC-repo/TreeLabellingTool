@@ -109,16 +109,19 @@
         <span>Crown metrics — {{ treeMetrics.length }} trees</span>
         <button class="metrics-close" @click="treeMetrics = []">✕</button>
       </div>
+      <div v-if="dtmSource !== 'external'" class="metrics-warn">
+        No ground points — heights may be inaccurate
+      </div>
       <div class="metrics-scroll">
         <table class="metrics-table">
           <thead>
             <tr>
               <th title="Tree instance number">#</th>
-              <th title="Maximum height above terrain (m)">Ht (m)</th>
-              <th title="Estimated crown base height (m)">Hb (m)</th>
+              <th title="Maximum height above terrain (m). Requires accurate ground points for a correct DTM.">Ht (m)</th>
+              <th title="Crown base height: 10th-percentile of point heights above terrain (m)">Hb (m)</th>
               <th title="Live crown length: Ht − Hb (m)">Lc (m)</th>
-              <th title="Mean crown width: average of E-W and N-S extents (m)">CW (m)</th>
-              <th title="Crown footprint area (m²)">CA (m²)</th>
+              <th title="Crown width: diameter of a circle with the same area as the crown footprint — 2√(CA/π). More reliable than raw E-W/N-S extent which is skewed by outlier points.">CW (m)</th>
+              <th title="Crown footprint area: number of occupied 1m² CHM cells (m²)">CA (m²)</th>
               <th title="Number of LiDAR points in the tree">Pts</th>
             </tr>
           </thead>
@@ -461,6 +464,10 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   font-size: 11px; padding: 0 2px; line-height: 1;
 }
 .metrics-close:hover { color: #aac; }
+.metrics-warn {
+  font-size: 10px; color: #c84; background: #1a0e04;
+  padding: 4px 8px; border-bottom: 1px solid #2a1a08;
+}
 .metrics-scroll { overflow-x: auto; max-height: 220px; overflow-y: auto; }
 .metrics-table {
   width: 100%; border-collapse: collapse;

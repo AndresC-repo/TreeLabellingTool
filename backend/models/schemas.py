@@ -87,9 +87,9 @@ class TreeMetrics(BaseModel):
     height: float         # Ht — max height above terrain (m)
     base_height: float    # Hb — estimated crown base height (m)
     crown_length: float   # Lc — live crown length = Ht − Hb (m)
-    width_ew: float       # E-W crown extent (m)
-    width_ns: float       # N-S crown extent (m)
-    crown_width: float    # mean of E-W and N-S (m)
+    crown_width: float    # CW — area-derived circular equivalent diameter (m)
+    width_ew: float       # raw E-W extent (m) — outlier-sensitive
+    width_ns: float       # raw N-S extent (m) — outlier-sensitive
     crown_area: float     # footprint area (m²)
     point_count: int
 

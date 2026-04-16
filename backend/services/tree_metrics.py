@@ -10,6 +10,7 @@ Metrics follow Duncanson et al. (2014):
   CA  — crown area         : occupied CHM-cell count × cell_size² (m²)
 """
 from __future__ import annotations
+import math
 import numpy as np
 
 
@@ -83,23 +84,29 @@ def compute_tree_metrics(
         Hb = float(np.percentile(th, 10))
         Lc = max(0.0, Ht - Hb)
 
-        width_ew = float(tx.max() - tx.min())
-        width_ns = float(ty.max() - ty.min())
-        cw = (width_ew + width_ns) / 2.0
-
         # Crown area: unique CHM cells occupied by the instance
         cr, cc = _rc(tx, ty)
         n_cells = int(np.unique(cr * cols + cc).size)
         ca = n_cells * cell_size * cell_size
+
+        # Crown width — area-derived circular equivalent diameter.
+        # Using max-min extent is unreliable: a few outlier points far from
+        # the main crown inflate it dramatically (e.g. 90 m for a 27 m crown).
+        # 2*sqrt(CA/π) gives the diameter of a circle with the same footprint area.
+        cw = 2.0 * math.sqrt(ca / math.pi) if ca > 0 else 0.0
+
+        # Raw extents kept as supplementary info
+        width_ew = float(tx.max() - tx.min())
+        width_ns = float(ty.max() - ty.min())
 
         metrics.append({
             'id':           int(tid),
             'height':       round(Ht, 2),
             'base_height':  round(Hb, 2),
             'crown_length': round(Lc, 2),
+            'crown_width':  round(cw, 2),
             'width_ew':     round(width_ew, 2),
             'width_ns':     round(width_ns, 2),
-            'crown_width':  round(cw, 2),
             'crown_area':   round(ca, 1),
             'point_count':  int(mask.sum()),
         })
