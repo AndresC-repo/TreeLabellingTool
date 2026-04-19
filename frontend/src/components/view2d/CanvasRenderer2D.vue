@@ -5,6 +5,7 @@
     @mousemove="onMouseMove"
     @mouseup="onMouseUp"
     @mouseleave="onMouseLeave"
+    @contextmenu.prevent
   >
     <canvas ref="canvasRef" class="view-canvas"></canvas>
     <div v-if="loading" class="overlay-msg">Loading…</div>
@@ -248,7 +249,7 @@ const fixedTool    = shallowRef(null)
 let isPanning = false, lastX = 0, lastY = 0
 
 function onMouseDown(e) {
-  if (e.button === 1 || (e.button === 0 && (e.altKey || e.ctrlKey))) {
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && (e.altKey || e.ctrlKey))) {
     isPanning = true; lastX = e.clientX; lastY = e.clientY; e.preventDefault()
   }
 }
@@ -287,7 +288,7 @@ function onSvgMouseMove(e) {
   else if (store.activeTool === 'fixed') fixedTool.value?.onMouseMove(e)
 }
 async function onSvgMouseUp(e) {
-  if (e.button === 1 || (e.button === 0 && (e.altKey || e.ctrlKey))) return
+  if (e.button === 1 || e.button === 2 || (e.button === 0 && (e.altKey || e.ctrlKey))) return
   if (store.activeTool === 'rectangle') {
     const b = rectTool.value?.onMouseUp(e)
     if (b) await doExtract('rectangle', b, null)
