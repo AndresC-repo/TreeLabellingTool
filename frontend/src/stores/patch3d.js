@@ -21,6 +21,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   // Prediction state
   const predicting        = ref(false)
   const segmenting        = ref(false)
+  const isWholePatch      = ref(false)
   const hasPrediction     = ref(false)
   const inferenceVersion  = ref('v1')   // 'v1' | 'v2'
   // [{ label: number, name: string, color: string, count: number }]
@@ -66,6 +67,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     lastApplied.value = null
     predicting.value = false
     segmenting.value = false
+    isWholePatch.value = false
     hasPrediction.value = false
     inferenceVersion.value = 'v1'
     predictionLegend.value  = []
@@ -85,7 +87,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
     protectClasses, showAllLabels,
-    predicting, segmenting, hasPrediction, predictionLegend,
+    predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion,
     segmentationPeaks, segmentationSeedPeaks,
     groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
