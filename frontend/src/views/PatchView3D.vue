@@ -100,6 +100,7 @@ function onKeyDown(e) {
 
 onMounted(() => {
   store.patchNumber = parseInt(route.query.n) || 1
+  store.isWholePatch = route.query.whole === '1'
   document.addEventListener('keydown', onKeyDown)
 })
 
