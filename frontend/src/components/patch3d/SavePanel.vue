@@ -30,6 +30,7 @@ const error = ref(null)
 // Auto-generate: tree_las_patch_1_101_102.las
 const suggestedFilename = computed(() => {
   const stem = (session.filename ?? 'output').replace(/\.la[sz]$/i, '')
+  if (patchStore.isWholePatch) return `${stem}.las`
   const n = patchStore.patchNumber
   const labels = patchStore.appliedLabels
   if (labels.length === 0) return `${stem}_patch_${n}.las`
