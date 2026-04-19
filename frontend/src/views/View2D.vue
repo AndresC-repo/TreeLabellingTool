@@ -34,6 +34,12 @@
           :class="{ active: store.activeTool === tool.id }"
           @click="store.activeTool = tool.id"
         >{{ tool.label }}</button>
+        <button
+          class="whole-btn"
+          :disabled="extractingWhole"
+          @click="loadWholePatch"
+          title="Load the entire LAS file into the point cloud view"
+        >{{ extractingWhole ? 'Loading…' : 'Whole Patch' }}</button>
       </div>
     </header>
     <div class="main-area">
@@ -62,7 +68,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
-import { uploadFile } from '../api/client.js'
+import { uploadFile, extractPatch } from '../api/client.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
 import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
@@ -76,6 +82,7 @@ const fileInput = ref(null)
 const loadingFiles = ref(false)
 const loadProgress = ref('')
 const dropdownOpen = ref(false)
+const extractingWhole = ref(false)
 
 const currentFilename = computed(() =>
   session.sessions.find(s => s.sessionId === route.params.id)?.filename ?? session.filename ?? 'Point Cloud'
@@ -131,6 +138,31 @@ function removeSession(id) {
 function openPatch(region) {
   router.push(`/session/${route.params.id}/patch/${region.patch_id}?n=${region.patch_number}`)
 }
+
+async function loadWholePatch() {
+  const sessionId = route.params.id
+  const entry = session.sessions.find(s => s.sessionId === sessionId)
+  if (!entry?.bounds) return
+  extractingWhole.value = true
+  try {
+    const bounds = entry.bounds
+    const res = await extractPatch(sessionId, {
+      selection_type: 'rectangle',
+      bounds_2d: {
+        x_min: bounds.x[0],
+        x_max: bounds.x[1],
+        y_min: bounds.y[0],
+        y_max: bounds.y[1],
+      },
+    })
+    const { patch_id, patch_number } = res.data
+    router.push(`/session/${sessionId}/patch/${patch_id}?n=${patch_number}&whole=1`)
+  } catch (err) {
+    console.error('Whole patch extraction failed:', err)
+  } finally {
+    extractingWhole.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -150,6 +182,12 @@ function openPatch(region) {
   flex-shrink: 0;
 }
 .tool-group { display: flex; gap: 6px; margin-left: auto; }
+.whole-btn {
+  background: #2a3a5e;
+  border-color: #4a6aae;
+  color: #adf;
+}
+.whole-btn:hover:not(:disabled) { background: #3a4a7e; }
 button {
   background: #2a2a4e;
   color: #cce;
