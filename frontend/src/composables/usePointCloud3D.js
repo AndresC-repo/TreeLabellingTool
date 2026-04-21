@@ -377,14 +377,15 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   }
 
   function applyLabelColor(indices, labelValue, protectClasses = false) {
-    const [r, g, b] = paletteColor(labelValue)
+    const [r, g, b] = colorForLabel(labelValue, true)
     for (const i of indices) {
       // Mirror backend protect-classes logic: skip ASPRS class 2 (ground) and 6 (building).
       // Use origAsprsClassifications (true ASPRS from LAS file) so protect logic works even
       // after custom labels have been applied on top.
-      if (protectClasses && origAsprsClassifications) {
-        const origCls = Math.round(origAsprsClassifications[i])
-        if (origCls === 2 || origCls === 6) continue
+      if (protectClasses) {
+        const origCls = origAsprsClassifications ? Math.round(origAsprsClassifications[i]) : -1
+        const curLbl  = currentLabels ? currentLabels[i] : -1
+        if (origCls === 2 || origCls === 6 || curLbl === 2 || curLbl === 6) continue
       }
       if (currentLabels) currentLabels[i] = labelValue
       classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b

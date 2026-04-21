@@ -20,6 +20,10 @@
         <input type="checkbox" v-model="store.showAllLabels" />
         <span>Show all labels (incl. ASPRS &lt;100)</span>
       </label>
+      <label class="setting-row setting-row-inline">
+        <span>Base Ground label</span>
+        <input type="number" v-model.number="store.baseGround" min="0" max="99" class="base-ground-input" />
+      </label>
     </div>
 
     <div class="label-control">
@@ -44,9 +48,9 @@
       class="gnd-btn"
       :disabled="store.selectedIndices.length === 0 || applying"
       @click="applyGnd"
-      title="Label as ground (0) [G]"
+      :title="`Label selection as ground (${store.baseGround}) [G]`"
     >
-      Label GND (0) <kbd>G</kbd>
+      Label GND ({{ store.baseGround }}) <kbd>G</kbd>
     </button>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
   </div>
@@ -79,10 +83,10 @@ async function applyGnd() {
   try {
     await labelPoints(route.params.id, route.params.patchId, {
       point_indices: Array.from(store.selectedIndices),
-      label_value: 0,
+      label_value: store.baseGround,
       protect_classes: store.protectClasses,
     })
-    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: 0, protectClasses: store.protectClasses }
+    store.lastApplied = { indices: Array.from(store.selectedIndices), labelValue: store.baseGround, protectClasses: store.protectClasses }
     store.viewMode = 'classification'
     view2d.markLabelled(route.params.patchId)
     store.selectedIndices = []
@@ -145,6 +149,13 @@ h3 { color: #adf; font-size: 14px; font-weight: 600; margin: 0; }
   font-size: 12px; color: #aac; cursor: pointer;
 }
 .setting-row input[type="checkbox"] { accent-color: #7ab3ff; cursor: pointer; }
+.setting-row-inline { justify-content: space-between; margin-top: 6px; cursor: default; }
+.base-ground-input {
+  width: 52px; text-align: center;
+  background: #1e2840; color: #eee;
+  border: 1px solid #445; border-radius: 3px;
+  padding: 2px 4px; font-size: 12px;
+}
 
 .label-control { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
 input[type="number"] {

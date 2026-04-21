@@ -72,8 +72,12 @@ def apply_label(
         )
 
     if protect_classes and "orig_cls" in state:
-        orig = state["orig_cls"]
-        indices = [i for i in indices if orig[i] not in _PROTECTED_CLASSES]
+        orig   = state["orig_cls"]
+        labels = state["labels"]
+        indices = [
+            i for i in indices
+            if orig[i] not in _PROTECTED_CLASSES and labels[i] not in _PROTECTED_CLASSES
+        ]
 
     state["labels"][indices] = label_value
     if label_value != 0:

@@ -17,6 +17,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const protectClasses    = ref(true)   // when true, skip ASPRS class 2 & 6 when labeling
   // Classification view setting — persists across patches in the session
   const showAllLabels     = ref(true)   // when true, color all labels; false = only ASPRS < 100
+  // Base ground label value — used by Label GND button and DTM "Label as GND" action
+  const baseGround        = ref(2)
 
   // Prediction state
   const predicting        = ref(false)
@@ -86,7 +88,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   return {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
-    protectClasses, showAllLabels,
+    protectClasses, showAllLabels, baseGround,
     predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion,
     segmentationPeaks, segmentationSeedPeaks,

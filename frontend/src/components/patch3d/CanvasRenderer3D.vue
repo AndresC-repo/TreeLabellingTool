@@ -25,6 +25,11 @@
           <button :class="{ active: store.viewMode === 'dtm' }"       @click="store.viewMode = 'dtm'"       title="DTM — shows only ground points coloured by elevation">DTM</button>
           <button :class="{ active: store.viewMode === 'chm' }"       @click="store.viewMode = 'chm'"       title="CHM — all non-ground points coloured by height above terrain">CHM</button>
         </div>
+        <div v-if="store.viewMode === 'dtm' && store.groundIndices.length > 0" class="btn-row dtm-action-row">
+          <button class="dtm-gnd-btn" @click="applyGndDtm" :title="`Label all points at the average DTM elevation (±2σ) as ${store.baseGround}`">
+            Label as GND ({{ store.baseGround }})
+          </button>
+        </div>
       </div>
 
       <!-- ── Labels view ── -->
@@ -342,6 +347,44 @@ async function runPrediction(version = 'v1') {
   }
 }
 
+async function applyGndDtm() {
+  const gndIdx = store.groundIndices
+  const positions = getPositions()
+  if (!gndIdx.length || !positions) return
+
+  // Compute mean and std-dev Z of the known ground (DTM) points
+  let sumZ = 0
+  for (const i of gndIdx) sumZ += positions[i * 3 + 2]
+  const avgZ = sumZ / gndIdx.length
+
+  let sumSq = 0
+  for (const i of gndIdx) { const dz = positions[i * 3 + 2] - avgZ; sumSq += dz * dz }
+  const stdZ = Math.sqrt(sumSq / gndIdx.length)
+  // Tolerance: 2× std-dev of actual ground Z, minimum 0.3 m
+  const tol = Math.max(stdZ * 2, 0.3)
+
+  // Select ALL points within that Z band (not just existing class-2)
+  const count = store.pointCount
+  const indices = []
+  for (let i = 0; i < count; i++) {
+    if (Math.abs(positions[i * 3 + 2] - avgZ) <= tol) indices.push(i)
+  }
+  if (!indices.length) return
+
+  try {
+    await labelPoints(route.params.id, route.params.patchId, {
+      point_indices: indices,
+      label_value: store.baseGround,
+      protect_classes: false,
+    })
+    store.lastApplied = { indices, labelValue: store.baseGround, protectClasses: false }
+    store.addAppliedLabel(store.baseGround)
+    applyLabelColor(indices, store.baseGround, false)
+    store.viewMode = 'classification'
+    view2d.markLabelled(route.params.patchId)
+  } catch (err) { console.error('DTM label GND failed:', err) }
+}
+
 async function onGndBelow() {
   const positions = getPositions()
   if (!positions) return
@@ -522,6 +565,12 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
 .btn-row {
   display: flex; gap: 3px; align-items: center; flex-wrap: nowrap;
 }
+.dtm-action-row { margin-top: 4px; }
+.dtm-gnd-btn {
+  background: #1a2e1a !important; color: #7c9 !important;
+  border-color: #2a5a2a !important; font-size: 11px !important;
+}
+.dtm-gnd-btn:hover { background: #243e24 !important; }
 
 .toolbar-overlay button {
   background: #1a2438; color: #8899bb; border: 1px solid #2a3a58;
