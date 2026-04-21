@@ -450,6 +450,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   }
 
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
+  function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, getPointsMesh, dispose }
 }

@@ -1,5 +1,5 @@
 <template>
-  <div ref="container" class="canvas3d">
+  <div ref="container" class="canvas3d" @mousemove="onHoverMove" @mouseleave="hoverInfo = null">
     <div v-if="loading" class="loading">Loading patch...</div>
     <LassoOverlay
       :drawing="lasso.drawing.value"
@@ -111,6 +111,12 @@
     />
     <!-- Corner axis triad -->
     <canvas ref="axisCanvas" class="axis-triad"></canvas>
+    <!-- Point hover tooltip -->
+    <div
+      v-if="hoverInfo"
+      class="hover-label-tip"
+      :style="{ left: hoverInfo.x + 'px', top: hoverInfo.y + 'px' }"
+    >{{ hoverInfo.text }}</div>
   </div>
 </template>
 
@@ -136,7 +142,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, getPointsMesh, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -529,6 +535,40 @@ onBeforeUnmount(() => {
   dispose()
 })
 
+// ── Point hover tooltip ───────────────────────────────────────────────────────
+
+const hoverInfo = ref(null)
+const _hoverRaycaster = new THREE.Raycaster()
+let   _hoverThrottle  = null
+
+function onHoverMove(e) {
+  if (store.viewMode !== 'prediction') { hoverInfo.value = null; return }
+  const labels = store.inferenceLabels
+  const mesh   = getPointsMesh()
+  if (!labels || !mesh || !camera.value || !renderer.value) { hoverInfo.value = null; return }
+  if (_hoverThrottle) return
+  _hoverThrottle = setTimeout(() => { _hoverThrottle = null }, 30)
+
+  const rect = renderer.value.domElement.getBoundingClientRect()
+  _hoverRaycaster.setFromCamera(
+    { x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((e.clientY - rect.top) / rect.height) * 2 + 1 },
+    camera.value
+  )
+  // Scale threshold with camera distance so it stays ~2 pixels regardless of zoom
+  const camDist = camera.value.position.distanceTo(controls?.target ?? camera.value.position)
+  _hoverRaycaster.params.Points = { threshold: camDist * 0.003 }
+
+  const hits = _hoverRaycaster.intersectObject(mesh)
+  if (!hits.length) { hoverInfo.value = null; return }
+
+  const idx = hits[0].index
+  const lbl  = labels[idx]
+  const name = store.predictionLegend.find(e => e.label === lbl)?.name ?? `Class ${lbl}`
+  const cRect = container.value.getBoundingClientRect()
+  hoverInfo.value = { x: e.clientX - cRect.left + 14, y: e.clientY - cRect.top + 14, text: name }
+}
+
 defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
 </script>
 
@@ -627,5 +667,14 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
   pointer-events: none; z-index: 10;
   border-radius: 8px;
   background: rgba(0,0,0,0.3);
+}
+
+.hover-label-tip {
+  position: absolute; pointer-events: none; z-index: 30;
+  background: rgba(10, 14, 30, 0.88);
+  color: #ddf; font-size: 12px;
+  padding: 4px 8px; border-radius: 4px;
+  border: 1px solid #445;
+  white-space: nowrap;
 }
 </style>

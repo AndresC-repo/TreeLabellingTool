@@ -37,6 +37,7 @@ Algorithm
 from __future__ import annotations
 import numpy as np
 from scipy.ndimage import uniform_filter, gaussian_filter, label as nd_label
+from scipy.spatial import cKDTree
 from skimage.feature import peak_local_max
 from skimage.segmentation import watershed
 
@@ -278,10 +279,21 @@ def segment_tree_instances(
     seed_peaks_out = np.column_stack([seed_px, seed_py, seed_pz]).astype(np.float32)
 
     # ── Map tree points to watershed basins ───────────────────────────────────
-    point_basin  = ws[tr, tc]                              # 0 = unassigned
+    # Points outside the canopy mask (ws==0) get NN-assigned to the nearest peak
+    # so they never land on a real tree's ID by accident.
+    point_basin  = ws[tr, tc]                              # 0 = outside canopy mask
     instance_ids = np.where(
-        point_basin > 0, 200 + point_basin, 201
+        point_basin > 0, 200 + point_basin, 0
     ).astype(np.int32)
+    _unassigned = instance_ids == 0
+    if _unassigned.any():
+        _kd = cKDTree(np.column_stack([seed_px, seed_py]))
+        _dists, _nn = _kd.query(np.column_stack([x[tree_mask][_unassigned],
+                                                  y[tree_mask][_unassigned]]), k=1)
+        _in_range = _dists <= max_radius
+        _idx = np.where(_unassigned)[0]
+        instance_ids[_idx[_in_range]]  = (200 + basin_ids[_nn[_in_range]]).astype(np.int32)
+        # Points beyond max_radius stay 0 (unclassified — inference error)
 
     # ── Post-process: merge small basins ─────────────────────────────────────
     valid_peak_basin_ids = basin_ids      # 1-indexed, same order as seed_peaks_out
@@ -301,16 +313,30 @@ def segment_tree_instances(
             valid_basin_ids_orig = (valid_inst - 200).astype(int)  # 1-based
 
             new_markers = np.zeros((rows, cols), dtype=np.int32)
+            new_seed_px_list, new_seed_py_list = [], []
             for new_i, orig_bid in enumerate(valid_basin_ids_orig):
                 r_s = int(peak_flat_idx[orig_bid] // cols)
                 c_s = int(peak_flat_idx[orig_bid] % cols)
                 new_markers[r_s, c_s] = new_i + 1
+                new_seed_px_list.append(x_min + c_s * cell_size + cell_size / 2)
+                new_seed_py_list.append(y_min + r_s * cell_size + cell_size / 2)
+            new_seed_px = np.array(new_seed_px_list, dtype=np.float32)
+            new_seed_py = np.array(new_seed_py_list, dtype=np.float32)
 
             ws2 = watershed(-chm_smooth, markers=new_markers, mask=canopy_mask)
             point_basin2 = ws2[tr, tc]
             instance_ids = np.where(
-                point_basin2 > 0, 200 + point_basin2, 201
+                point_basin2 > 0, 200 + point_basin2, 0
             ).astype(np.int32)
+            _unassigned2 = instance_ids == 0
+            if _unassigned2.any():
+                _kd2 = cKDTree(np.column_stack([new_seed_px, new_seed_py]))
+                _dists2, _nn2 = _kd2.query(np.column_stack([x[tree_mask][_unassigned2],
+                                                              y[tree_mask][_unassigned2]]), k=1)
+                _in_range2 = _dists2 <= max_radius
+                _idx2 = np.where(_unassigned2)[0]
+                instance_ids[_idx2[_in_range2]] = (201 + _nn2[_in_range2]).astype(np.int32)
+                # Points beyond max_radius stay 0 (unclassified — inference error)
 
             valid_peak_basin_ids = valid_basin_ids_orig
             print(f"[tree_segmentor] merged to {len(valid_basin_ids_orig)} valid instances")
