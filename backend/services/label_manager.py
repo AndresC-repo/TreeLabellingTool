@@ -91,7 +91,12 @@ def apply_label(
 
 
 def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
-    """Replace the entire label array with the provided one-per-point labels."""
+    """Replace the entire label array with the provided one-per-point labels.
+
+    Points whose original ASPRS classification is 2 (ground) or 6 (building)
+    are always preserved — their original class is kept regardless of what the
+    incoming labels array says.
+    """
     state = _state.get(patch_id)
     if state is None:
         raise KeyError(f"Patch {patch_id} not initialized")
@@ -99,7 +104,13 @@ def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
         raise ValueError(
             f"Label count mismatch: got {len(labels)}, expected {len(state['labels'])}"
         )
-    state["labels"] = labels.astype(np.int32)
+    new_labels = labels.astype(np.int32)
+    if "orig_cls" in state:
+        orig = state["orig_cls"]
+        for cls in _PROTECTED_CLASSES:
+            mask = orig == cls
+            new_labels[mask] = cls
+    state["labels"] = new_labels
     state["used"] = {int(v) for v in np.unique(labels) if v != 0}
     unique, counts = np.unique(state["labels"], return_counts=True)
     return {

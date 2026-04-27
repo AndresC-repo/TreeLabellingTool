@@ -32,8 +32,15 @@ const suggestedFilename = computed(() => {
   const stem = (session.filename ?? 'output').replace(/\.la[sz]$/i, '')
   if (patchStore.isWholePatch) return `${stem}.las`
   const n = patchStore.patchNumber
-  const labels = patchStore.appliedLabels
+  const labels = [...patchStore.appliedLabels].sort((a, b) => a - b)
   if (labels.length === 0) return `${stem}_patch_${n}.las`
+  const instances = labels.filter(l => l >= 201)
+  if (instances.length >= 2) {
+    const first = instances[0], last = instances[instances.length - 1]
+    const nonInstance = labels.filter(l => l < 201)
+    const prefix = nonInstance.length ? `${nonInstance.join('_')}_` : ''
+    return `${stem}_patch_${n}_${prefix}${first}_${last}__t${instances.length}.las`
+  }
   return `${stem}_patch_${n}_${labels.join('_')}.las`
 })
 

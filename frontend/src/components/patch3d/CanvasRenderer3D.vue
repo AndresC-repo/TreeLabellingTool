@@ -17,6 +17,13 @@
         <button :class="{ active: !rotateMode }" @click="setRotate(false)" title="Draw lasso selection [R]">&#9684; <kbd>R</kbd></button>
       </div>
 
+      <!-- Point size -->
+      <div class="btn-group point-size-ctrl">
+        <button @click="changePointSize(-1)" :disabled="pointSize <= 1" title="Decrease point size">−</button>
+        <span>{{ pointSize }}px</span>
+        <button @click="changePointSize(1)"  :disabled="pointSize >= 8" title="Increase point size">+</button>
+      </div>
+
       <!-- ── Standard view ── -->
       <div class="btn-group mode-group">
         <span class="mode-label">Standard</span>
@@ -142,7 +149,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, getPositions, setElevationFilter, getPointsMesh, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, getPointsMesh, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -175,6 +182,14 @@ let axisScene = null
 let axisCamera = null
 let axisAnimId = null
 const rotateMode = ref(true)
+const pointSize  = ref(2)
+
+function changePointSize(delta) {
+  const next = Math.max(1, Math.min(8, pointSize.value + delta))
+  if (next === pointSize.value) return
+  pointSize.value = next
+  setPointSize(next)
+}
 let cloudCenter = null
 let cloudSpan = 1
 let lastView = null   // 'top' | 'side'
@@ -541,11 +556,27 @@ const hoverInfo = ref(null)
 const _hoverRaycaster = new THREE.Raycaster()
 let   _hoverThrottle  = null
 
+const _ASPRS_NAMES = {
+  0: 'Unclassified', 1: 'Unclassified', 2: 'Ground', 3: 'Low Vegetation',
+  4: 'Medium Vegetation', 5: 'High Vegetation', 6: 'Building',
+  7: 'Low Point (Noise)', 9: 'Water', 17: 'Bridge Deck', 18: 'High Noise',
+}
+
+function _labelName(lbl) {
+  if (lbl === 0)   return 'Unclassified'
+  if (lbl === 101) return 'Tree'
+  if (lbl >= 201)  return `Tree #${lbl - 200}`
+  return _ASPRS_NAMES[lbl] ?? `Label ${lbl}`
+}
+
 function onHoverMove(e) {
-  if (store.viewMode !== 'prediction') { hoverInfo.value = null; return }
-  const labels = store.inferenceLabels
-  const mesh   = getPointsMesh()
-  if (!labels || !mesh || !camera.value || !renderer.value) { hoverInfo.value = null; return }
+  const mode = store.viewMode
+  const isInference     = mode === 'prediction' || mode === 'inference-chm'
+  const isClassification = mode === 'classification'
+  if (!isInference && !isClassification) { hoverInfo.value = null; return }
+
+  const mesh = getPointsMesh()
+  if (!mesh || !camera.value || !renderer.value) { hoverInfo.value = null; return }
   if (_hoverThrottle) return
   _hoverThrottle = setTimeout(() => { _hoverThrottle = null }, 30)
 
@@ -555,7 +586,6 @@ function onHoverMove(e) {
       y: -((e.clientY - rect.top) / rect.height) * 2 + 1 },
     camera.value
   )
-  // Scale threshold with camera distance so it stays ~2 pixels regardless of zoom
   const camDist = camera.value.position.distanceTo(controls?.target ?? camera.value.position)
   _hoverRaycaster.params.Points = { threshold: camDist * 0.003 }
 
@@ -563,13 +593,20 @@ function onHoverMove(e) {
   if (!hits.length) { hoverInfo.value = null; return }
 
   const idx = hits[0].index
-  const lbl  = labels[idx]
-  const name = store.predictionLegend.find(e => e.label === lbl)?.name ?? `Class ${lbl}`
+  let name
+  if (isInference) {
+    const lbl = store.inferenceLabels?.[idx]
+    name = lbl != null ? (store.predictionLegend.find(e => e.label === lbl)?.name ?? _labelName(lbl)) : null
+  } else {
+    const lbl = getLabelAt(idx)
+    name = lbl != null ? _labelName(lbl) : null
+  }
+  if (name == null) { hoverInfo.value = null; return }
   const cRect = container.value.getBoundingClientRect()
   hoverInfo.value = { x: e.clientX - cRect.left + 14, y: e.clientY - cRect.top + 14, text: name }
 }
 
-defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
+defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
 </script>
 
 <style scoped>
@@ -624,6 +661,9 @@ defineExpose({ highlightIndices, applyLabelColor, applyPredictionColors, resetCo
   background: #243050; color: #bbd;
 }
 .toolbar-overlay button:disabled { opacity: 0.35; cursor: default; }
+.point-size-ctrl span {
+  color: #cce; font-size: 12px; min-width: 28px; text-align: center; user-select: none;
+}
 .toolbar-overlay kbd {
   display: inline-block; font-size: 9px; font-family: monospace;
   background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);

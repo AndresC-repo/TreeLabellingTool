@@ -224,7 +224,8 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   const loading = ref(false)
   const pointCount = ref(0)
   const dtmAvailable = ref(true)  // false when no class-2 ground points exist
-  let pointsMesh = null
+  let pointsMesh  = null
+  let _pointSize  = 2
   let elevationColors = null      // original server colors (elevation), never modified
   let classificationColors = null // per-point label colors (rebuilt from currentLabels)
   let dtmColors = null            // min-Z in local cell, elevation gradient
@@ -285,7 +286,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       const geo = new THREE.BufferGeometry()
       geo.setAttribute('position', new THREE.BufferAttribute(positions, 3))
       geo.setAttribute('color', new THREE.BufferAttribute(colors.slice(), 3))
-      const mat = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false })
+      const mat = new THREE.PointsMaterial({ size: _pointSize, vertexColors: true, sizeAttenuation: false })
       pointsMesh = new THREE.Points(geo, mat)
       scene.value.add(pointsMesh)
 
@@ -418,6 +419,22 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     if (viewMode.value === 'classification') _applyToMesh(classificationColors)
   }
 
+  function applyLabelsBulkColors(newLabels) {
+    if (!currentLabels || !classificationColors || newLabels.length !== currentLabels.length) return
+    for (let i = 0; i < newLabels.length; i++) {
+      const orig = origAsprsClassifications ? origAsprsClassifications[i] : 0
+      currentLabels[i] = (orig === 2 || orig === 6) ? orig : newLabels[i]
+    }
+    rebuildClassificationColors(true)
+    viewMode.value = 'classification'
+    _applyToMesh(classificationColors)
+  }
+
+  function setPointSize(size) {
+    _pointSize = size
+    if (pointsMesh) pointsMesh.material.size = size
+  }
+
   function resetColors() {
     _applyToMesh(_activeColors())
   }
@@ -449,8 +466,10 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     }
   }
 
+  function getLabelAt(index) { return currentLabels ? currentLabels[index] : null }
+
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
   function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, viewMode, getPositions, getZBounds, setElevationFilter, getPointsMesh, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, getPointsMesh, dispose }
 }

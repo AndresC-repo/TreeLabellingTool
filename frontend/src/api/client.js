@@ -71,3 +71,23 @@ export const getTreeMetrics = (sessionId, patchId, labels, cell_size, dtmGrid) =
   }
   return api.post(`/patches/${sessionId}/${patchId}/tree-metrics`, payload)
 }
+
+export const autoTuneSegmentation = (sessionId, patchId, labels, nTrials, dtmGrid) => {
+  const payload = { labels, n_trials: nTrials }
+  if (dtmGrid) {
+    payload.dtm_grid    = dtmGrid.grid
+    payload.dtm_rows    = dtmGrid.rows
+    payload.dtm_cols    = dtmGrid.cols
+    payload.dtm_x_min   = dtmGrid.xMin
+    payload.dtm_y_min   = dtmGrid.yMin
+    payload.dtm_x_range = dtmGrid.xRange
+    payload.dtm_y_range = dtmGrid.yRange
+  }
+  return api.post(`/patches/${sessionId}/${patchId}/auto-tune-segmentation`, payload)
+}
+
+export const markTrainingExample = (sessionId, patchId, semanticLabels, gtInstanceLabels) =>
+  api.post(`/patches/${sessionId}/${patchId}/mark-training`, {
+    semantic_labels: semanticLabels,
+    ...(gtInstanceLabels ? { gt_instance_labels: gtInstanceLabels } : {}),
+  })

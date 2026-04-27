@@ -13,6 +13,8 @@
         <InferenceLegend
           v-if="store.viewMode === 'prediction' || store.viewMode === 'inference-chm'"
           @segment-done="onSegmentDone"
+          @inference-edited="onSegmentDone"
+          @labels-bulk-applied="onLabelsBulkApplied"
         />
         <SavePanel ref="savePanel" />
       </aside>
@@ -35,6 +37,11 @@ const store = usePatch3DStore()
 const renderer3d = ref(null)
 const labelPanel = ref(null)
 const savePanel = ref(null)
+
+function onLabelsBulkApplied(labels) {
+  renderer3d.value?.applyLabelsBulkColors(Array.from(labels))
+  store.viewMode = 'classification'
+}
 
 function onSegmentDone(newLabels) {
   // applyPredictionColors recomputes both prediction and inference-CHM color buffers

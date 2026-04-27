@@ -4,7 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -322,4 +322,84 @@ def download_patch(session_id: str, patch_id: str):
         str(latest),
         media_type="application/octet-stream",
         filename=latest.name,
+    )
+
+@router.post("/{session_id}/{patch_id}/auto-tune-segmentation", response_model=AutoTuneResponse)
+def auto_tune_segmentation(session_id: str, patch_id: str, req: AutoTuneRequest):
+    """Bayesian hyperparameter search for CHM tree segmentation.
+
+    Runs req.n_trials Optuna trials and returns the best parameter set and quality score.
+    Does NOT mutate any label state — caller applies results via the segment endpoint.
+    """
+    from services.seg_autotuner import autotune, _build_dtm_kwargs
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+    labels_in = np.array(req.labels, dtype=np.int32)
+    try:
+        las = laspy.read(str(patch_path))
+        x   = np.array(las.x,              dtype=np.float32)
+        y   = np.array(las.y,              dtype=np.float32)
+        z   = np.array(las.z,              dtype=np.float32)
+        cls = np.array(las.classification, dtype=np.int32)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read patch: {e}")
+    if len(labels_in) != len(x):
+        raise HTTPException(400, f"Label count {len(labels_in)} != point count {len(x)}")
+    dtm_kwargs = _build_dtm_kwargs(req.dict())
+    try:
+        result = autotune(x, y, z,
+                          semantic_labels=labels_in,
+                          original_cls=cls,
+                          dtm_kwargs=dtm_kwargs,
+                          n_trials=max(1, min(req.n_trials, 100)))
+    except Exception as e:
+        raise HTTPException(500, f"Auto-tune error: {e}")
+    return AutoTuneResponse(**result)
+
+@router.post("/{session_id}/{patch_id}/mark-training", response_model=MarkTrainingResponse)
+def mark_training(session_id: str, patch_id: str, req: MarkTrainingRequest):
+    """Save current in-memory label state as a ground-truth training example.
+
+    semantic_labels (0/101) come from the frontend (store.semanticLabels).
+    Ground-truth instance labels (201+) are read from the in-memory label state
+    which reflects any manual corrections the user made after applying segmentation.
+    """
+    from services.training_store import save_training_example, count_training_examples
+
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+
+    semantic = np.array(req.semantic_labels, dtype=np.int32)
+
+    if req.gt_instance_labels is not None:
+        gt_labels = np.array(req.gt_instance_labels, dtype=np.int32)
+        if len(gt_labels) != len(semantic):
+            raise HTTPException(400, f"gt_instance_labels length {len(gt_labels)} != semantic_labels length {len(semantic)}")
+    else:
+        gt_labels = lm.get_labels(patch_id)
+        if gt_labels is None:
+            raise HTTPException(404, "Patch label state not found — extract and apply labels first")
+        if len(semantic) != len(gt_labels):
+            raise HTTPException(400, f"Semantic label count {len(semantic)} != patch size {len(gt_labels)}")
+
+    try:
+        las = laspy.read(str(patch_path))
+        x   = np.array(las.x,              dtype=np.float32)
+        y   = np.array(las.y,              dtype=np.float32)
+        z   = np.array(las.z,              dtype=np.float32)
+        cls = np.array(las.classification, dtype=np.int32)
+    except Exception as e:
+        raise HTTPException(500, f"Failed to read patch: {e}")
+
+    eid = save_training_example(x, y, z, cls, semantic, gt_labels.copy(), patch_id)
+    total   = count_training_examples()
+    n_trees = int((gt_labels >= 201).sum())
+
+    return MarkTrainingResponse(
+        example_id=eid,
+        n_points=int(len(x)),
+        n_trees=n_trees,
+        total_examples=total,
     )

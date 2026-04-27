@@ -8,6 +8,21 @@
       <span class="cnt">{{ e.count.toLocaleString() }}</span>
     </div>
 
+    <!-- Inference edit — shown when a lasso selection is active -->
+    <div v-if="store.selectedIndices.length > 0 && store.inferenceLabels" class="inf-edit-section">
+      <div class="inf-edit-header">{{ store.selectedIndices.length.toLocaleString() }} points selected</div>
+      <div class="inf-edit-row">
+        <select v-model.number="inferenceEditLabel" class="inf-edit-select">
+          <option :value="0">Unclassify (remove)</option>
+          <option v-for="e in store.predictionLegend.filter(e => e.label >= 201)" :key="e.label" :value="e.label">
+            {{ e.name }}
+          </option>
+        </select>
+        <button class="inf-edit-apply" @click="applyInferenceLabel(inferenceEditLabel)">Apply</button>
+      </div>
+      <button class="inf-edit-clear" @click="store.selectedIndices = []">Clear selection</button>
+    </div>
+
     <!-- Segmentation controls — shown once inference results exist -->
     <div v-if="hasTreeLabel" class="segment-section">
       <div class="section-header" @click="paramsOpen = !paramsOpen">
@@ -73,6 +88,28 @@
           <input v-model.number="params.min_crown_cells" type="number" min="0" step="5" class="param-input" />
         </label>
       </div>
+
+      <button
+        class="autotune-btn"
+        :disabled="autoTuning || store.segmenting || applying"
+        @click="runAutoTune"
+        title="Run Bayesian optimisation (~30 trials, 1–3 min) to find best segmentation params"
+      >
+        {{ autoTuning ? 'Tuning…' : 'Auto-tune Params' }}
+      </button>
+      <div v-if="autoTuneScore !== null" class="autotune-note">
+        Score: {{ autoTuneScore.toFixed(3) }} ({{ autoTuneMode }}) — params updated ↑ click Segment to apply
+      </div>
+
+      <button
+        class="training-btn"
+        :disabled="savingTraining || !store.inferenceLabels"
+        @click="saveTrainingExample"
+        title="Save this patch's corrected segmentation as a training example for future auto-tune runs"
+      >
+        {{ savingTraining ? 'Saving…' : 'Save as Training Example' }}
+      </button>
+      <div v-if="trainingMessage" class="training-note">{{ trainingMessage }}</div>
 
       <button
         class="segment-btn"
@@ -157,9 +194,9 @@
 import { ref, computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
-import { applyLabelsBulk, segmentTrees, getTreeMetrics } from '../../api/client.js'
+import { applyLabelsBulk, segmentTrees, getTreeMetrics, autoTuneSegmentation, markTrainingExample } from '../../api/client.js'
 
-const emit = defineEmits(['segment-done'])
+const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-applied'])
 
 const route = useRoute()
 const store = usePatch3DStore()
@@ -171,9 +208,15 @@ const applying        = ref(false)
 const applied         = ref(false)
 const instanceMessage = ref('')
 const paramsOpen      = ref(false)
+const autoTuning      = ref(false)
+const autoTuneScore   = ref(null)
+const autoTuneMode    = ref('')
 const helpOpen        = ref(false)
 const metricsLoading  = ref(false)
 const treeMetrics     = ref([])
+const savingTraining    = ref(false)
+const trainingMessage   = ref('')
+const inferenceEditLabel = ref(0)   // target instance label for lasso reassignment
 
 // Segmentation hyperparameters — all editable via UI
 const params = reactive({
@@ -215,6 +258,23 @@ function _paletteHex(labelValue) {
   }
   const hex = v => Math.round(Math.min(Math.max(v, 0), 1) * 255).toString(16).padStart(2, '0')
   return `#${hex(r)}${hex(g)}${hex(b)}`
+}
+
+function applyInferenceLabel(targetLabel) {
+  if (!store.inferenceLabels || !store.selectedIndices.length) return
+  const newLabels = Array.from(store.inferenceLabels)
+  for (const i of store.selectedIndices) newLabels[i] = targetLabel
+  store.inferenceLabels = newLabels
+
+  // Rebuild legend counts
+  const counts = {}
+  for (const lbl of newLabels) counts[lbl] = (counts[lbl] || 0) + 1
+  store.predictionLegend = store.predictionLegend
+    .map(e => ({ ...e, count: counts[e.label] ?? 0 }))
+    .filter(e => e.count > 0)
+
+  store.selectedIndices = []
+  emit('inference-edited', newLabels)
 }
 
 async function runSegmentation() {
@@ -286,6 +346,49 @@ async function runSegmentation() {
   }
 }
 
+async function runAutoTune() {
+  if (!store.semanticLabels || autoTuning.value) return
+  autoTuning.value    = true
+  autoTuneScore.value = null
+  try {
+    const res = await autoTuneSegmentation(
+      route.params.id, route.params.patchId,
+      Array.from(store.semanticLabels),
+      30,
+      store.dtmGrid || null,
+    )
+    Object.assign(params, res.data.best_params)
+    autoTuneScore.value = res.data.best_score
+    autoTuneMode.value  = res.data.mode ?? 'geometric'
+    paramsOpen.value    = true
+  } catch (err) {
+    console.error('Auto-tune failed:', err)
+  } finally {
+    autoTuning.value = false
+  }
+}
+
+async function saveTrainingExample() {
+  if (!store.semanticLabels || savingTraining.value) return
+  savingTraining.value  = true
+  trainingMessage.value = ''
+  try {
+    const res = await markTrainingExample(
+      route.params.id,
+      route.params.patchId,
+      Array.from(store.semanticLabels),
+      store.inferenceLabels ? Array.from(store.inferenceLabels) : null,
+    )
+    const { n_trees, total_examples } = res.data
+    trainingMessage.value = `Saved ✓ — ${n_trees} trees, ${total_examples} example${total_examples > 1 ? 's' : ''} total`
+  } catch (err) {
+    console.error('Save training example failed:', err)
+    trainingMessage.value = 'Save failed — see console'
+  } finally {
+    savingTraining.value = false
+  }
+}
+
 async function runMetrics() {
   if (!store.inferenceLabels || metricsLoading.value) return
   metricsLoading.value = true
@@ -319,6 +422,7 @@ async function applyToLabels() {
       if (e.label !== 0) store.addAppliedLabel(e.label)
     }
     applied.value = true
+    emit('labels-bulk-applied', store.inferenceLabels)
   } catch (err) {
     console.error('Apply to labels failed:', err)
   } finally {
@@ -419,6 +523,19 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .segment-btn:hover:not(:disabled) { background: #2a6a3e; }
 .segment-btn:disabled { opacity: 0.4; cursor: default; }
 
+.autotune-btn {
+  width: 100%; padding: 7px; margin-bottom: 4px;
+  background: #1e2e50; border: 1px solid #3a5a9e;
+  border-radius: 5px; color: #99c; cursor: pointer; font-size: 12px;
+}
+.autotune-btn:hover:not(:disabled) { background: #2a3e6e; }
+.autotune-btn:disabled { opacity: 0.4; cursor: default; }
+.autotune-note {
+  font-size: 10px; color: #7af; text-align: center;
+  background: #0a1428; border: 1px solid #2a4060;
+  border-radius: 4px; padding: 4px 8px; margin-bottom: 6px;
+}
+
 .apply-btn {
   margin-top: 6px; width: 100%; padding: 8px;
   background: #2a4a6e; border: 1px solid #4a7aae;
@@ -486,4 +603,41 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 }
 .metrics-table td:first-child { text-align: center; color: #99c; font-weight: 600; }
 .metrics-table tbody tr:hover { background: #141c2c; }
+
+/* ── Inference edit (lasso reassignment) ──────────────────────── */
+.inf-edit-section {
+  margin: 8px 0; padding: 8px 10px;
+  background: #1a1a2e; border: 1px solid #4a4a7a;
+  border-radius: 5px; display: flex; flex-direction: column; gap: 6px;
+}
+.inf-edit-header { font-size: 11px; color: #aac; font-weight: 600; }
+.inf-edit-row { display: flex; gap: 6px; align-items: center; }
+.inf-edit-select {
+  flex: 1; background: #12122a; color: #eee;
+  border: 1px solid #445; border-radius: 4px;
+  padding: 4px 6px; font-size: 11px;
+}
+.inf-edit-apply {
+  padding: 4px 10px; background: #2a2a5e; border: 1px solid #5a5aae;
+  border-radius: 4px; color: #aaf; cursor: pointer; font-size: 11px; white-space: nowrap;
+}
+.inf-edit-apply:hover { background: #3a3a7e; }
+.inf-edit-clear {
+  font-size: 10px; color: #667; background: none; border: none;
+  cursor: pointer; text-align: left; padding: 0;
+}
+.inf-edit-clear:hover { color: #99b; }
+
+.training-btn {
+  width: 100%; padding: 7px; margin-bottom: 4px;
+  background: #1e3828; border: 1px solid #3a7a4e;
+  border-radius: 5px; color: #9c9; cursor: pointer; font-size: 12px;
+}
+.training-btn:hover:not(:disabled) { background: #2a4e38; }
+.training-btn:disabled { opacity: 0.4; cursor: default; }
+.training-note {
+  font-size: 10px; color: #8d8; text-align: center;
+  background: #0a1e14; border: 1px solid #2a5a38;
+  border-radius: 4px; padding: 4px 8px; margin-bottom: 6px;
+}
 </style>
