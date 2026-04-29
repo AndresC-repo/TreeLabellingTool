@@ -91,3 +91,10 @@ export const markTrainingExample = (sessionId, patchId, semanticLabels, gtInstan
     semantic_labels: semanticLabels,
     ...(gtInstanceLabels ? { gt_instance_labels: gtInstanceLabels } : {}),
   })
+
+export const relabelSelection = (sessionId, patchId, pointIndices, fromLabel, toLabel) =>
+  api.post(`/patches/${sessionId}/${patchId}/relabel-selection`, {
+    point_indices: pointIndices,
+    from_label: fromLabel,
+    to_label: toLabel,
+  })

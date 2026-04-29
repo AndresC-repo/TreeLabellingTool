@@ -53,6 +53,20 @@
       Label GND ({{ store.baseGround }}) <kbd>G</kbd>
     </button>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
+
+    <!-- Replace label X → Y within selection -->
+    <div v-if="store.selectedIndices.length > 0" class="replace-section">
+      <div class="replace-row">
+        <span class="replace-lbl">Replace</span>
+        <input v-model.number="fromLabel" type="number" min="0" class="replace-input" title="Source label" />
+        <span class="replace-arrow">→</span>
+        <input v-model.number="toLabel" type="number" min="0" class="replace-input" title="Target label" />
+      </div>
+      <button class="replace-btn" :disabled="applying" @click="applyReplace">
+        {{ replacing ? 'Replacing...' : 'Replace in Selection' }}
+      </button>
+      <p v-if="replaceResult !== null" class="hint replace-result">{{ replaceResult }} pts replaced</p>
+    </div>
   </div>
 </template>
 
@@ -60,7 +74,7 @@
 import { ref, watch } from 'vue'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
-import { labelPoints, getNextLabel } from '../../api/client.js'
+import { labelPoints, getNextLabel, relabelSelection } from '../../api/client.js'
 import { useRoute } from 'vue-router'
 
 const store = usePatch3DStore()
@@ -68,7 +82,11 @@ const view2d = useView2DStore()
 const route = useRoute()
 const labelValue = ref(store.nextLabel)
 const applying = ref(false)
+const replacing = ref(false)
 const settingsOpen = ref(false)
+const fromLabel = ref(0)
+const toLabel = ref(101)
+const replaceResult = ref(null)
 
 watch(() => store.nextLabel, v => { labelValue.value = v })
 
@@ -118,6 +136,34 @@ async function applyLabel() {
     console.error('Label apply failed:', err)
   } finally {
     applying.value = false
+  }
+}
+
+async function applyReplace() {
+  if (store.selectedIndices.length === 0 || replacing.value) return
+  replacing.value = true
+  replaceResult.value = null
+  try {
+    const res = await relabelSelection(
+      route.params.id,
+      route.params.patchId,
+      Array.from(store.selectedIndices),
+      fromLabel.value,
+      toLabel.value,
+    )
+    const { applied, applied_indices } = res.data
+    replaceResult.value = applied
+    if (applied > 0) {
+      store.lastApplied = { indices: applied_indices, labelValue: toLabel.value, protectClasses: false }
+      store.viewMode = 'classification'
+      store.addAppliedLabel(toLabel.value)
+      view2d.markLabelled(route.params.patchId)
+    }
+  } catch (err) {
+    console.error('Replace label failed:', err)
+    replaceResult.value = 'error'
+  } finally {
+    replacing.value = false
   }
 }
 </script>
@@ -191,6 +237,29 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
 .protect-note { color: #668; font-size: 11px; }
+
+.replace-section { margin-top: 10px; border-top: 1px solid #334; padding-top: 10px; }
+.replace-row {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+}
+.replace-lbl { font-size: 12px; color: #88a; white-space: nowrap; }
+.replace-arrow { font-size: 14px; color: #556; }
+.replace-input {
+  width: 52px; text-align: center;
+  background: #2a2a4e; color: #eee;
+  border: 1px solid #556; padding: 4px;
+  border-radius: 4px; font-size: 13px;
+}
+.replace-input::-webkit-inner-spin-button { opacity: 0.5; }
+.replace-btn {
+  width: 100%; padding: 8px;
+  background: #3a2a5e; border: 1px solid #6a5a8e;
+  border-radius: 6px; color: #cca; cursor: pointer; font-size: 13px;
+}
+.replace-btn:hover:not(:disabled) { background: #4a3a7e; }
+.replace-btn:disabled { opacity: 0.4; cursor: default; }
+.replace-result { color: #adf; }
+
 kbd {
   display: inline-block; font-size: 9px; font-family: monospace;
   background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);

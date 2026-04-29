@@ -122,3 +122,12 @@ class MarkTrainingResponse(BaseModel):
     n_points: int
     n_trees: int
     total_examples: int
+
+class RelabelSelectionRequest(BaseModel):
+    point_indices: List[int]
+    from_label: int
+    to_label: int
+
+class RelabelSelectionResponse(BaseModel):
+    applied: int
+    applied_indices: List[int]

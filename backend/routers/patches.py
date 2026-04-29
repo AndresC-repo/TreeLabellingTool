@@ -4,7 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -403,3 +403,15 @@ def mark_training(session_id: str, patch_id: str, req: MarkTrainingRequest):
         n_trees=n_trees,
         total_examples=total,
     )
+
+@router.post("/{session_id}/{patch_id}/relabel-selection", response_model=RelabelSelectionResponse)
+def relabel_selection(session_id: str, patch_id: str, req: RelabelSelectionRequest):
+    """Within point_indices, replace from_label with to_label; all other labels are untouched."""
+    labels = lm.get_labels(patch_id)
+    if labels is None:
+        raise HTTPException(404, "Patch label state not found")
+    filtered = [i for i in req.point_indices if labels[i] == req.from_label]
+    if not filtered:
+        return RelabelSelectionResponse(applied=0, applied_indices=[])
+    result = lm.apply_label(patch_id, filtered, req.to_label, protect_classes=False)
+    return RelabelSelectionResponse(applied=result["points_labeled"], applied_indices=filtered)
