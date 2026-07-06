@@ -98,3 +98,19 @@ export const relabelSelection = (sessionId, patchId, pointIndices, fromLabel, to
     from_label: fromLabel,
     to_label: toLabel,
   })
+
+export const predictInstances = (sessionId, patchId, version = 'v1', params = {}) => {
+  const { bandwidth = 2.0, min_points = 100, embed_weight = 0.3, max_spread = 5.0 } = params
+  return api.get(`/patches/${sessionId}/${patchId}/predict-instances`, {
+    params: { version, bandwidth, min_points, embed_weight, max_spread },
+  })
+}
+
+export const undoLabel = (sessionId, patchId) =>
+  api.post(`/patches/${sessionId}/${patchId}/undo`)
+
+export const restoreFromClient = (sessionId, patchId, buffer) =>
+  api.post(`/patches/${sessionId}/${patchId}/restore-from-client`, buffer, {
+    headers: { 'Content-Type': 'application/octet-stream' },
+    transformRequest: [(data) => data],
+  })

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { getPatchPoints } from '../api/client.js'
 import { parse3DBuffer } from '../utils/binaryBuffer.js'
 import { ref } from 'vue'
+import { setPatchCache } from './pointCloudCache.js'
 
 // Label color palette: 101→Magenta, 102→Cyan, 103→Yellow, 104+→cycle
 const LABEL_PALETTE = [
@@ -269,6 +270,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       cachedPositions = positions
       cachedClassifications = classifications
       origAsprsClassifications = origClassifications
+      setPatchCache(positions, origClassifications)
 
       // Compute Z bounds from all points
       _zMin = Infinity; _zMax = -Infinity
@@ -419,6 +421,16 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     if (viewMode.value === 'classification') _applyToMesh(classificationColors)
   }
 
+  function applyUndoColors(indices, labelValues) {
+    if (!currentLabels || !classificationColors) return
+    for (let i = 0; i < indices.length; i++) {
+      currentLabels[indices[i]] = labelValues[i]
+    }
+    rebuildClassificationColors(true)
+    viewMode.value = 'classification'
+    _applyToMesh(classificationColors)
+  }
+
   function applyLabelsBulkColors(newLabels) {
     if (!currentLabels || !classificationColors || newLabels.length !== currentLabels.length) return
     for (let i = 0; i < newLabels.length; i++) {
@@ -471,5 +483,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
   function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, getPointsMesh, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, getPointsMesh, dispose }
 }

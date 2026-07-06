@@ -177,6 +177,41 @@
       </div>
     </div>
 
+    <!-- Instance segmentation via 3-head model (offset + embedding + mean-shift) -->
+    <div class="inst-section">
+      <div class="section-header" @click="instParamsOpen = !instParamsOpen">
+        <span>Instance segmentation (3-head)</span>
+        <span class="chevron">{{ instParamsOpen ? '▲' : '▼' }}</span>
+      </div>
+      <div v-if="instParamsOpen" class="params-grid">
+        <label class="param-row">
+          <span class="param-name" title="Mean-shift bandwidth in metres — controls how far apart two tree centres can be and still merge into one cluster. Roughly equal to the maximum expected crown radius.">Bandwidth (m)</span>
+          <input v-model.number="instParams.bandwidth" type="number" min="0.5" max="20" step="0.5" class="param-input" />
+        </label>
+        <label class="param-row">
+          <span class="param-name" title="Clusters with fewer points than this are discarded as noise.">Min pts / tree</span>
+          <input v-model.number="instParams.min_points" type="number" min="1" step="50" class="param-input" />
+        </label>
+        <label class="param-row">
+          <span class="param-name" title="How much the 5-D embedding features contribute relative to shifted XY position. Higher = more embedding influence.">Embed weight</span>
+          <input v-model.number="instParams.embed_weight" type="number" min="0" max="2" step="0.05" class="param-input" />
+        </label>
+        <label class="param-row">
+          <span class="param-name" title="DBSCAN eps for spatial coherence check (metres). Points further than this from the main cluster blob are demoted to background.">Max spread (m)</span>
+          <input v-model.number="instParams.max_spread" type="number" min="1" max="30" step="1" class="param-input" />
+        </label>
+      </div>
+      <button
+        class="inst-btn"
+        :disabled="instRunning || store.segmenting || applying"
+        @click="runInstanceSegmentation"
+        title="Run offset+embedding heads then mean-shift clustering — no CHM step"
+      >
+        {{ instRunning ? 'Running…' : 'Run Instance Segmentation' }}
+      </button>
+      <p v-if="instMessage" class="info-msg">{{ instMessage }}</p>
+    </div>
+
     <button
       v-if="store.predictionLegend.length"
       class="apply-btn"
@@ -194,7 +229,7 @@
 import { ref, computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
-import { applyLabelsBulk, segmentTrees, getTreeMetrics, autoTuneSegmentation, markTrainingExample } from '../../api/client.js'
+import { applyLabelsBulk, segmentTrees, getTreeMetrics, autoTuneSegmentation, markTrainingExample, predictInstances } from '../../api/client.js'
 
 const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-applied'])
 
@@ -217,6 +252,17 @@ const treeMetrics     = ref([])
 const savingTraining    = ref(false)
 const trainingMessage   = ref('')
 const inferenceEditLabel = ref(0)   // target instance label for lasso reassignment
+
+// Instance segmentation (3-head)
+const instRunning    = ref(false)
+const instMessage    = ref('')
+const instParamsOpen = ref(false)
+const instParams = reactive({
+  bandwidth:    2.0,
+  min_points:   100,
+  embed_weight: 0.3,
+  max_spread:   5.0,
+})
 
 // Segmentation hyperparameters — all editable via UI
 const params = reactive({
@@ -408,6 +454,48 @@ async function runMetrics() {
   }
 }
 
+async function runInstanceSegmentation() {
+  if (instRunning.value) return
+  instRunning.value = true
+  instMessage.value = ''
+  applied.value = false
+  store.segmentationPeaks = []
+  store.segmentationSeedPeaks = []
+  try {
+    const res = await predictInstances(
+      route.params.id,
+      route.params.patchId,
+      store.inferenceVersion,
+      instParams,
+    )
+    const { labels, n_instances } = res.data
+    store.inferenceLabels = labels
+
+    const counts = {}
+    for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
+
+    store.predictionLegend = Object.entries(counts)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([lbl, count]) => ({
+        label: Number(lbl),
+        name:  Number(lbl) === 0 ? 'Non-tree' : `Tree #${Number(lbl) - 200}`,
+        color: _paletteHex(Number(lbl)),
+        count,
+      }))
+
+    instMessage.value = n_instances === 0
+      ? 'No instances found'
+      : `${n_instances} tree instance${n_instances > 1 ? 's' : ''} found`
+
+    emit('segment-done', labels)
+  } catch (err) {
+    console.error('Instance segmentation failed:', err)
+    instMessage.value = `Failed: ${err.response?.data?.detail ?? err.message}`
+  } finally {
+    instRunning.value = false
+  }
+}
+
 async function applyToLabels() {
   if (!store.predictionLegend.length) return
   applying.value = true
@@ -554,6 +642,14 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .valid-dot { background: #ff3030; box-shadow: 0 0 4px #ff4040; }
 .marker-text { color: #778; }
 
+.inst-section { margin-top: 10px; border-top: 1px solid #334; padding-top: 10px; }
+.inst-btn {
+  width: 100%; padding: 8px; margin-top: 6px;
+  background: #1e2e4e; border: 1px solid #4a6aae;
+  border-radius: 5px; color: #adf; cursor: pointer; font-size: 12px;
+}
+.inst-btn:hover:not(:disabled) { background: #2a3e6e; }
+.inst-btn:disabled { opacity: 0.4; cursor: default; }
 .info-msg { margin-top: 6px; font-size: 11px; color: #8cf; }
 .ok { margin-top: 6px; font-size: 11px; color: #6c6; }
 

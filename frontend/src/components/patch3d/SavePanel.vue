@@ -14,10 +14,11 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { savePatch, getDownloadUrl } from '../../api/client.js'
+import { savePatch, getDownloadUrl, restoreFromClient } from '../../api/client.js'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useSessionStore } from '../../stores/session.js'
+import { getPatchCache } from '../../composables/pointCloudCache.js'
 
 const route = useRoute()
 const patchStore = usePatch3DStore()
@@ -50,6 +51,25 @@ watch(suggestedFilename, v => { filename.value = v })
 
 defineExpose({ save })
 
+async function tryRestorePatch() {
+  const { positions, origCls } = getPatchCache()
+  if (!positions || !origCls) return false
+  const n = positions.length / 3
+  const buf = new Float32Array(n * 4)
+  for (let i = 0; i < n; i++) {
+    buf[i*4]   = positions[i*3]
+    buf[i*4+1] = positions[i*3+1]
+    buf[i*4+2] = positions[i*3+2]
+    buf[i*4+3] = origCls[i]
+  }
+  try {
+    await restoreFromClient(route.params.id, route.params.patchId, buf.buffer)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function save() {
   saving.value = true
   error.value = null
@@ -57,7 +77,24 @@ async function save() {
     await savePatch(route.params.id, route.params.patchId, filename.value)
     downloadUrl.value = getDownloadUrl(route.params.id, route.params.patchId)
   } catch (err) {
-    error.value = err.response?.data?.detail || 'Save failed'
+    if (err.response?.status === 404) {
+      error.value = 'Recovering patch data from browser…'
+      const recovered = await tryRestorePatch()
+      if (recovered) {
+        try {
+          await savePatch(route.params.id, route.params.patchId, filename.value)
+          downloadUrl.value = getDownloadUrl(route.params.id, route.params.patchId)
+          error.value = null
+          return
+        } catch (e2) {
+          error.value = e2.response?.data?.detail || 'Save failed after recovery'
+        }
+      } else {
+        error.value = 'Server lost patch file and browser cache is empty — please reload the page'
+      }
+    } else {
+      error.value = err.response?.data?.detail || 'Save failed'
+    }
   } finally {
     saving.value = false
   }

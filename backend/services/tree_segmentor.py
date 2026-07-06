@@ -300,7 +300,7 @@ def segment_tree_instances(
 
     if min_tree_points > 0 and n_peaks > 1:
         unique_inst, inst_counts = np.unique(instance_ids, return_counts=True)
-        valid_inst = unique_inst[inst_counts >= min_tree_points]
+        valid_inst = unique_inst[(inst_counts >= min_tree_points) & (unique_inst > 0)]
 
         if len(valid_inst) == 0:
             # Nothing survives — keep all as one instance
@@ -342,7 +342,7 @@ def segment_tree_instances(
             print(f"[tree_segmentor] merged to {len(valid_basin_ids_orig)} valid instances")
 
     new_labels[tree_mask] = instance_ids
-    tree_count = int(np.unique(instance_ids).size)
+    tree_count = int(np.unique(instance_ids[instance_ids > 0]).size)
 
     # Final valid peaks (subset of seed_peaks_out)
     # basin_ids and seed_peaks_out are in the same order

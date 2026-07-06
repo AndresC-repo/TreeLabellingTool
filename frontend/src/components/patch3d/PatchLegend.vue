@@ -26,9 +26,10 @@
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
-import { getPatchColormap, markTrainingExample } from '../../api/client.js'
+import { getPatchColormap, markTrainingExample, restoreFromClient } from '../../api/client.js'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useRoute } from 'vue-router'
+import { getPatchCache } from '../../composables/pointCloudCache.js'
 
 const route = useRoute()
 const store = usePatch3DStore()
@@ -73,13 +74,31 @@ onMounted(refresh)
 // Refresh whenever a label is applied
 watch(() => store.lastApplied, (v) => { if (v) refresh() })
 
+async function tryRestorePatch() {
+  const { positions, origCls } = getPatchCache()
+  if (!positions || !origCls) return false
+  const n = positions.length / 3
+  const buf = new Float32Array(n * 4)
+  for (let i = 0; i < n; i++) {
+    buf[i*4]   = positions[i*3]
+    buf[i*4+1] = positions[i*3+1]
+    buf[i*4+2] = positions[i*3+2]
+    buf[i*4+3] = origCls[i]
+  }
+  try {
+    await restoreFromClient(route.params.id, route.params.patchId, buf.buffer)
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function saveTrainingExample() {
   if (!store.semanticLabels || savingTraining.value) return
   savingTraining.value  = true
   trainingMessage.value = ''
-  try {
-    // semantic_labels (0/101) come from inference; GT instance labels (201+)
-    // are read server-side from lm.get_labels() which has all lasso corrections applied.
+
+  async function doSave() {
     const res = await markTrainingExample(
       route.params.id,
       route.params.patchId,
@@ -87,9 +106,29 @@ async function saveTrainingExample() {
     )
     const { n_trees, total_examples } = res.data
     trainingMessage.value = `Saved ✓ — ${n_trees} trees, ${total_examples} example${total_examples > 1 ? 's' : ''} total`
+  }
+
+  try {
+    await doSave()
   } catch (err) {
-    console.error('Save training example failed:', err)
-    trainingMessage.value = 'Save failed — see console'
+    if (err.response?.status === 404) {
+      trainingMessage.value = 'Recovering patch data…'
+      const recovered = await tryRestorePatch()
+      if (recovered) {
+        try {
+          await doSave()
+          return
+        } catch (e2) {
+          console.error('Save training example failed after recovery:', e2)
+          trainingMessage.value = 'Save failed after recovery — see console'
+        }
+      } else {
+        trainingMessage.value = 'Server lost patch file and browser cache is empty — reload page'
+      }
+    } else {
+      console.error('Save training example failed:', err)
+      trainingMessage.value = 'Save failed — see console'
+    }
   } finally {
     savingTraining.value = false
   }

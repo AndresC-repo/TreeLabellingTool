@@ -2,9 +2,9 @@ import re
 import numpy as np
 import laspy
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, FileResponse
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse, UndoResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -285,6 +285,49 @@ def run_prediction(session_id: str, patch_id: str, version: str = "v1"):
         raise HTTPException(500, f"Inference error: {e}")
     return {"labels": labels.tolist()}
 
+@router.get("/{session_id}/{patch_id}/predict-instances")
+def run_prediction_instances(
+    session_id: str, patch_id: str,
+    version: str = "v1",
+    bandwidth: float = 2.0,
+    min_points: int = 100,
+    embed_weight: float = 0.3,
+    max_spread: float = 5.0,
+):
+    """Run 3-head instance segmentation inference on a patch.
+
+    Uses the model's offset and embedding heads plus mean-shift clustering to
+    produce per-point instance labels directly (no CHM watershed step).
+
+    Returns: { labels: [int] }  — 0=non-tree, 201,202,… = individual tree instances
+    """
+    from services.predictor import predict_instances, VALID_VERSIONS, _MODEL_CONFIGS
+    if version not in VALID_VERSIONS:
+        raise HTTPException(400, f"version must be one of {VALID_VERSIONS}")
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+    try:
+        cfg = _MODEL_CONFIGS[version]
+        las = laspy.read(str(patch_path))
+        labels = predict_instances(
+            np.array(las.x, dtype=np.float32),
+            np.array(las.y, dtype=np.float32),
+            np.array(las.z, dtype=np.float32),
+            intensity      = np.array(las.intensity,      dtype=np.float32) if cfg['use_intensity']      else None,
+            classification = np.array(las.classification, dtype=np.float32) if cfg['use_classification'] else None,
+            version=version,
+            bandwidth=bandwidth,
+            min_points=min_points,
+            embed_weight=embed_weight,
+            max_spread=max_spread,
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Instance inference error: {e}")
+    n_inst = int(np.unique(labels[labels > 0]).size) if (labels > 0).any() else 0
+    return {"labels": labels.tolist(), "n_instances": n_inst}
+
 
 @router.post("/{session_id}/{patch_id}/save", response_model=SaveResponse)
 def save_patch(session_id: str, patch_id: str, req: SaveRequest):
@@ -404,6 +447,16 @@ def mark_training(session_id: str, patch_id: str, req: MarkTrainingRequest):
         total_examples=total,
     )
 
+@router.post("/{session_id}/{patch_id}/undo", response_model=UndoResponse)
+def undo_label(session_id: str, patch_id: str):
+    """Undo the last labelling operation on this patch."""
+    if lm.get_labels(patch_id) is None:
+        raise HTTPException(404, "Patch label state not found")
+    result = lm.undo_last(patch_id)
+    if result is None:
+        return UndoResponse(had_operation=False)
+    return UndoResponse(had_operation=True, **result)
+
 @router.post("/{session_id}/{patch_id}/relabel-selection", response_model=RelabelSelectionResponse)
 def relabel_selection(session_id: str, patch_id: str, req: RelabelSelectionRequest):
     """Within point_indices, replace from_label with to_label; all other labels are untouched."""
@@ -415,3 +468,35 @@ def relabel_selection(session_id: str, patch_id: str, req: RelabelSelectionReque
         return RelabelSelectionResponse(applied=0, applied_indices=[])
     result = lm.apply_label(patch_id, filtered, req.to_label, protect_classes=False)
     return RelabelSelectionResponse(applied=result["points_labeled"], applied_indices=filtered)
+
+@router.post("/{session_id}/{patch_id}/restore-from-client")
+async def restore_patch_from_client(session_id: str, patch_id: str, request: Request):
+    """Recreate the patch LAS file using point data sent from the browser.
+
+    Used for recovery when the server-side patch file is lost (e.g. after a volume wipe)
+    while the in-memory label state is still intact.
+
+    Body: raw binary float32 array, 4 values per point: x, y, z, orig_classification.
+    """
+    body = await request.body()
+    if not body or len(body) % 16 != 0:
+        raise HTTPException(400, "Body must be a multiple of 16 bytes (4 float32 per point)")
+
+    data = np.frombuffer(body, dtype=np.float32).reshape(-1, 4)
+    x   = np.array(data[:, 0], dtype=np.float64)
+    y   = np.array(data[:, 1], dtype=np.float64)
+    z   = np.array(data[:, 2], dtype=np.float64)
+    cls = np.array(data[:, 3], dtype=np.int32)
+
+    patch_dir = get_session_dir(session_id) / "patches"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    patch_path = patch_dir / f"{patch_id}.las"
+
+    new_las = laspy.LasData(header=laspy.LasHeader(point_format=0))
+    new_las.x = x
+    new_las.y = y
+    new_las.z = z
+    new_las.classification = np.clip(cls, 0, 255).astype(np.uint8)
+    new_las.write(str(patch_path))
+
+    return {"ok": True, "point_count": int(len(x))}

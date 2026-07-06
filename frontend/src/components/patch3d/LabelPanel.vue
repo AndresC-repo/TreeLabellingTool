@@ -52,6 +52,14 @@
     >
       Label GND ({{ store.baseGround }}) <kbd>G</kbd>
     </button>
+    <button
+      class="undo-btn"
+      :disabled="undoing"
+      @click="undoLast"
+      title="Undo last label operation [Ctrl+Z]"
+    >
+      {{ undoing ? 'Undoing…' : 'Undo' }} <kbd>Ctrl+Z</kbd>
+    </button>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
 
     <!-- Replace label X → Y within selection -->
@@ -71,10 +79,10 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
-import { labelPoints, getNextLabel, relabelSelection } from '../../api/client.js'
+import { labelPoints, getNextLabel, relabelSelection, undoLabel } from '../../api/client.js'
 import { useRoute } from 'vue-router'
 
 const store = usePatch3DStore()
@@ -82,6 +90,7 @@ const view2d = useView2DStore()
 const route = useRoute()
 const labelValue = ref(store.nextLabel)
 const applying = ref(false)
+const undoing = ref(false)
 const replacing = ref(false)
 const settingsOpen = ref(false)
 const fromLabel = ref(0)
@@ -94,6 +103,32 @@ function increment() { labelValue.value++ }
 function decrement() { labelValue.value = Math.max(0, labelValue.value - 1) }
 
 defineExpose({ applyLabel, applyGnd })
+
+function onKeyDown(e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault()
+    undoLast()
+  }
+}
+onMounted(() => window.addEventListener('keydown', onKeyDown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
+
+async function undoLast() {
+  if (undoing.value) return
+  undoing.value = true
+  try {
+    const res = await undoLabel(route.params.id, route.params.patchId)
+    if (res.data.had_operation) {
+      store.undoResult = res.data
+      store.viewMode = 'classification'
+      view2d.markLabelled(route.params.patchId)
+    }
+  } catch (err) {
+    console.error('Undo failed:', err)
+  } finally {
+    undoing.value = false
+  }
+}
 
 async function applyGnd() {
   if (store.selectedIndices.length === 0) return
@@ -234,6 +269,14 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
 }
 .gnd-btn:hover:not(:disabled) { background: #4a4a4a; color: #ccc; }
 .gnd-btn:disabled { opacity: 0.4; cursor: default; }
+.undo-btn {
+  width: 100%; padding: 8px;
+  background: #2a1a1a; border: 1px solid #664444;
+  border-radius: 6px; color: #c88; cursor: pointer; font-size: 13px;
+  margin-top: 6px;
+}
+.undo-btn:hover:not(:disabled) { background: #3a2a2a; color: #eaa; }
+.undo-btn:disabled { opacity: 0.4; cursor: default; }
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
 .protect-note { color: #668; font-size: 11px; }

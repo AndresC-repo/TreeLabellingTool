@@ -131,3 +131,9 @@ class RelabelSelectionRequest(BaseModel):
 class RelabelSelectionResponse(BaseModel):
     applied: int
     applied_indices: List[int]
+
+class UndoResponse(BaseModel):
+    had_operation: bool
+    full_reload: bool = False
+    indices: List[int] = []
+    label_values: List[int] = []

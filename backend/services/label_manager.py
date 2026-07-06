@@ -36,9 +36,10 @@ def init_patch(
     orig = original_classification.astype(np.int32)
     labels = current_labels.astype(np.int32) if current_labels is not None else orig.copy()
     _state[patch_id] = {
-        "labels":   labels,
-        "orig_cls": orig,          # immutable reference — used for protect-classes filtering
-        "used": {int(v) for v in np.unique(labels) if v != 0},
+        "labels":     labels,
+        "orig_cls":   orig,
+        "used":       {int(v) for v in np.unique(labels) if v != 0},
+        "undo_stack": [],
     }
 
 
@@ -51,6 +52,13 @@ def get_next_label(patch_id: str) -> int:
 
 
 _PROTECTED_CLASSES = frozenset({2, 6})   # ASPRS ground, building
+_UNDO_LIMIT = 20
+
+
+def _push_undo(state: dict, entry: dict) -> None:
+    state["undo_stack"].append(entry)
+    if len(state["undo_stack"]) > _UNDO_LIMIT:
+        state["undo_stack"].pop(0)
 
 
 def apply_label(
@@ -79,6 +87,10 @@ def apply_label(
             if orig[i] not in _PROTECTED_CLASSES and labels[i] not in _PROTECTED_CLASSES
         ]
 
+    if indices:
+        prev = state["labels"][list(indices)].copy()
+        _push_undo(state, {"type": "selective", "indices": list(indices), "prev": prev})
+
     state["labels"][indices] = label_value
     if label_value != 0:
         state["used"].add(label_value)
@@ -104,6 +116,7 @@ def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
         raise ValueError(
             f"Label count mismatch: got {len(labels)}, expected {len(state['labels'])}"
         )
+    _push_undo(state, {"type": "full", "prev": state["labels"].copy()})
     new_labels = labels.astype(np.int32)
     if "orig_cls" in state:
         orig = state["orig_cls"]
@@ -117,6 +130,30 @@ def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
         "points_labeled": int(len(labels)),
         "label_stats": {str(int(u)): int(c) for u, c in zip(unique, counts)},
     }
+
+
+def undo_last(patch_id: str) -> "dict | None":
+    """Pop the last operation from the undo stack and restore previous labels.
+
+    Returns a dict describing what was restored, or None if the stack is empty.
+    For selective undos: { full_reload: False, indices: [int], label_values: [int] }
+    For full undos:      { full_reload: True,  indices: [],    label_values: [int] }
+    """
+    state = _state.get(patch_id)
+    if not state or not state["undo_stack"]:
+        return None
+    entry = state["undo_stack"].pop()
+    if entry["type"] == "selective":
+        idx = entry["indices"]
+        prev = entry["prev"]
+        state["labels"][idx] = prev
+        state["used"] = {int(v) for v in np.unique(state["labels"]) if v != 0}
+        return {"full_reload": False, "indices": idx, "label_values": prev.tolist()}
+    else:  # "full"
+        prev = entry["prev"]
+        state["labels"] = prev
+        state["used"] = {int(v) for v in np.unique(prev) if v != 0}
+        return {"full_reload": True, "indices": [], "label_values": prev.tolist()}
 
 
 def get_labels(patch_id: str) -> Optional[np.ndarray]:

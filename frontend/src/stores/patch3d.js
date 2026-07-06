@@ -37,6 +37,9 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   // [[x,y,z], ...] ALL CHM local maxima used as watershed seeds (for visualisation)
   const segmentationSeedPeaks = ref([])
 
+  // Undo signal — set after a successful undo to trigger color rebuild in CanvasRenderer3D
+  const undoResult = ref(null)   // { full_reload, indices, label_values } | null
+
   // Ground indices (class 2) — for Label GND+ button
   const groundIndices = ref([])
 
@@ -77,6 +80,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     semanticLabels.value    = null
     segmentationPeaks.value = []
     segmentationSeedPeaks.value = []
+    undoResult.value = null
     groundIndices.value = []
     dtmGrid.value = null
     zBoundsMin.value = 0
@@ -92,7 +96,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion,
     segmentationPeaks, segmentationSeedPeaks,
-    groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    undoResult, groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     addAppliedLabel, reset,
   }
 })

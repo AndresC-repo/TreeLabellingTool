@@ -149,7 +149,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, getPointsMesh, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, getPointsMesh, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -289,6 +289,15 @@ watch(() => store.viewMode, mode => setViewMode(mode))
 watch(() => store.lastApplied, applied => {
   if (!applied) return
   applyLabelColor(applied.indices, applied.labelValue, applied.protectClasses ?? false)
+})
+
+watch(() => store.undoResult, result => {
+  if (!result) return
+  if (result.full_reload) {
+    applyLabelsBulkColors(new Int32Array(result.label_values))
+  } else {
+    applyUndoColors(result.indices, result.label_values)
+  }
 })
 
 // React to showAllLabels toggle — rebuild classification colors
