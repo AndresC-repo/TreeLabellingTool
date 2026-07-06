@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONDONTWRITEBYTECODE=1
+      - CUDA_VISIBLE_DEVICES=
 
   frontend:
     build: ./frontend

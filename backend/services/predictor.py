@@ -1,20 +1,30 @@
 """
 Inference service for SegmentAnyTree models.
 
-v1 — XYZ                       in_channels=3  best_model.pth
-v2 — XYZ + classification      in_channels=4  best_model_cls.pth
-v3 — XYZ + intensity           in_channels=4  best_model_int.pth
-v4 — XYZ + intensity + class   in_channels=5  best_model_int_cls.pth
+v1 -- XYZ                       in_channels=3  best_model.pth
+v2 -- XYZ + classification      in_channels=5  best_model_cls.pth
+v3 -- XYZ + intensity           in_channels=4  best_model_int.pth
+v4 -- XYZ + intensity + class   in_channels=6  best_model_int_cls.pth
 """
 from __future__ import annotations
 import numpy as np
 import torch
-import MinkowskiEngine as ME
+import spconv.pytorch as spconv
+from spconv.pytorch import SparseConvTensor
 from huggingface_hub import hf_hub_download
 from services.segment_any_tree import SegmentAnyTree
 
 _MODEL_REPO = "AndCarr/UrbanTreeDetector"
-_VOXEL_SIZE = 0.1   # metres
+_VOXEL_SIZE = 0.05  # metres -- must match training (finetune_config.yaml: voxel_size: 0.05)
+
+# Sliding-window inference constants
+# The model was trained on small patches (~20-30 m diameter).
+# When the input exceeds _MAX_DIRECT_M in X or Y we tile it into overlapping
+# windows, run the model on each tile, and merge by averaging softmax scores.
+_MAX_DIRECT_M = 150.0   # metres -- below this, run in one shot
+_TILE_SIZE_M  = 120.0   # side length of each inference tile
+_TILE_STEP_M  =  60.0   # step between tiles (50 % overlap)
+_MIN_TILE_PTS =  20     # skip tiles with fewer points than this
 
 _MODEL_CONFIGS: dict[str, dict] = {
     'v1': {
@@ -26,31 +36,34 @@ _MODEL_CONFIGS: dict[str, dict] = {
     },
     'v2': {
         'filename':           'best_model_cls.pth',
-        'in_channels':        5,   # 3 (XYZ) + 2 (classification, 2-channel encoding)
+        'in_channels':        5,
         'use_intensity':      False,
         'use_classification': True,
         'label':              'XYZ + Classification',
     },
     'v3': {
         'filename':           'best_model_int.pth',
-        'in_channels':        4,   # 3 (XYZ) + 1 (intensity)
+        'in_channels':        4,
         'use_intensity':      True,
         'use_classification': False,
         'label':              'XYZ + Intensity',
     },
     'v4': {
         'filename':           'best_model_int_cls.pth',
-        'in_channels':        6,   # 3 (XYZ) + 1 (intensity) + 2 (classification)
+        'in_channels':        6,
         'use_intensity':      True,
         'use_classification': True,
         'label':              'XYZ + Intensity + Classification',
     },
 }
 
-_loaded: dict[str, SegmentAnyTree] = {}   # version → model singleton
-
+_loaded: dict[str, SegmentAnyTree] = {}
 VALID_VERSIONS = tuple(_MODEL_CONFIGS.keys())
 
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
 
 def _get_model(version: str) -> SegmentAnyTree:
     if version in _loaded:
@@ -71,10 +84,13 @@ def _get_model(version: str) -> SegmentAnyTree:
         print(f"[predictor] {version.upper()} ready (full-model save).")
         return obj
 
-    model = SegmentAnyTree(in_channels=cfg['in_channels'], num_classes=2, embedding_dim=5)
+    # Auto-detect embedding_dim from checkpoint (Embed.1.weight shape[0])
+    embed_weight = state_dict.get('Embed.1.weight')
+    embedding_dim = int(embed_weight.shape[0]) if embed_weight is not None else 5
 
-    # Flexible loading — mirrors the training script approach:
-    # skip layers whose shapes don't match (e.g. first conv when in_channels differs).
+    model = SegmentAnyTree(in_channels=cfg['in_channels'], num_classes=2,
+                           embedding_dim=embedding_dim)
+
     model_dict = model.state_dict()
     loaded = skipped_shape = skipped_missing = 0
     for key, value in state_dict.items():
@@ -84,87 +100,94 @@ def _get_model(version: str) -> SegmentAnyTree:
         if model_dict[key].shape == value.shape:
             model_dict[key] = value
             loaded += 1
-        elif (len(model_dict[key].shape) == 3 and len(value.shape) == 2):
-            # 1×1 conv kernel stored as [in, out] → [1, in, out]
+        elif len(model_dict[key].shape) == 3 and len(value.shape) == 2:
             model_dict[key] = value.unsqueeze(0)
             loaded += 1
         else:
             skipped_shape += 1
-            print(f"[predictor] WARNING shape mismatch — skipping {key}: "
-                  f"checkpoint {tuple(value.shape)} vs model {tuple(model_dict[key].shape)}")
+            print(f"[predictor] WARNING shape mismatch -- skipping {key}: "
+                  f"ckpt {tuple(value.shape)} vs model {tuple(model_dict[key].shape)}")
 
     model.load_state_dict(model_dict, strict=False)
-
-    if skipped_shape > 0:
-        print(f"[predictor] WARNING: {skipped_shape} layer(s) skipped due to shape mismatch.")
-        print(f"[predictor] This usually means the checkpoint was saved with different "
-              f"in_channels than {cfg['in_channels']}.")
-        print(f"[predictor] Upload the fine-tuned '{cfg['filename']}' weights to HuggingFace "
-              f"to fix this.")
     print(f"[predictor] {version.upper()} loaded: {loaded} layers "
           f"(skipped shape={skipped_shape}, missing={skipped_missing}).")
 
+    _force_spconv_native(model)
     model.eval()
     _loaded[version] = model
     print(f"[predictor] {version.upper()} ({cfg['label']}) ready.")
     return model
 
 
-def _voxelize(
+def _force_spconv_native(model: SegmentAnyTree) -> None:
+    """Set ConvAlgo.Native on every spconv layer for CPU inference."""
+    try:
+        from spconv.core import ConvAlgo
+    except ImportError:
+        try:
+            from spconv.algo import ConvAlgo
+        except ImportError:
+            print("[predictor] WARNING: cannot import ConvAlgo -- "
+                  "spconv algo not overridden; inference may fail on CPU.")
+            return
+    native = ConvAlgo.Native
+    count = 0
+    for m in model.modules():
+        if hasattr(m, 'algo'):
+            m.algo = native
+            count += 1
+    print(f"[predictor] Forced ConvAlgo.Native on {count} spconv layer(s).")
+
+
+# ---------------------------------------------------------------------------
+# Voxelisation
+# ---------------------------------------------------------------------------
+
+def _voxelize_metric(
     x: np.ndarray,
     y: np.ndarray,
     z: np.ndarray,
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Voxelise a point cloud and build normalised per-voxel features.
+    """Voxelize in metric units with HAG coordinate frame.
 
-    Feature columns (always in this order if present):
-      XYZ normalised                    (3 channels, always)
-      intensity / 65535                 (1 channel, optional)
-      is_ground   (class == 2)  float   (1 channel, optional)  ⎤ classification
-      is_building (class == 6)  float   (1 channel, optional)  ⎦ = 2 channels total
+    Coordinate frame -- MUST match dataset.py __getitem__:
+      XY : centroid-subtracted
+      Z  : height above ground (HAG) = z - percentile(z, 5)
+           Ground is always ~0, trees always ~tree_height, regardless of
+           patch size, city altitude, or tree/ground ratio.
 
     Returns
     -------
-    coords   : int32   (V, 4)  [batch=0, ix, iy, iz]
-    feats    : float32 (V, C)
-    inv_map  : int64   (N,)
+    coords  : int32  (V, 4)  [batch=0, ix, iy, iz]
+    feats   : float32 (V, C)
+    inv_map : int64  (N,)
     """
-    pts = np.stack([x, y, z], axis=1).astype(np.float64)
+    pts = np.stack([x, y, z], axis=1).astype(np.float32)
 
-    centroid = pts.mean(axis=0)
-    pts_norm = pts - centroid
-    scale = np.linalg.norm(pts_norm, axis=1).max()
-    if scale > 1e-6:
-        pts_norm /= scale
+    xy_centroid = pts[:, :2].mean(axis=0)
+    z_ground    = np.percentile(pts[:, 2], 5).astype(np.float32)
 
-    voxel_size_norm = _VOXEL_SIZE / (scale if scale > 1e-6 else 1.0)
-    quantised = np.floor(pts_norm / voxel_size_norm).astype(np.int64)
+    pts_c = pts.copy()
+    pts_c[:, :2] -= xy_centroid  # XY centroid-relative
+    pts_c[:, 2]  -= z_ground     # Z: HAG
 
-    unique_coords, inv_map = np.unique(quantised, axis=0, return_inverse=True)
-    V = len(unique_coords)
+    vox = np.round(pts_c / _VOXEL_SIZE).astype(np.int32)
+    unique_vox, inv_map = np.unique(vox, axis=0, return_inverse=True)
+    V = len(unique_vox)
 
-    # Build per-point feature matrix
-    cols = [pts_norm.astype(np.float32)]
+    cols = [pts_c]
     if intensity is not None:
-        # Intensity stored as uint16 in LAS (0–65535) → normalise to [0, 1]
         cols.append((intensity / 65535.0).reshape(-1, 1).astype(np.float32))
     if classification is not None:
-        # 2 binary channels matching training (dataset.py collate_fn):
-        #   ch0: is_ground   (ASPRS class == 2)
-        #   ch1: is_building (ASPRS class == 6)
         cls = classification.astype(np.int32)
-        is_ground    = (cls == 2).astype(np.float32).reshape(-1, 1)
-        is_building  = (cls == 6).astype(np.float32).reshape(-1, 1)
-        cols.append(is_ground)
-        cols.append(is_building)
+        cols.append((cls == 2).astype(np.float32).reshape(-1, 1))  # is_ground
+        cols.append((cls == 6).astype(np.float32).reshape(-1, 1))  # is_building
 
-    all_feats = np.concatenate(cols, axis=1)   # (N, C)
+    all_feats = np.concatenate(cols, axis=1).astype(np.float32)
     C = all_feats.shape[1]
 
-    # Average per voxel using vectorised scatter-add
     feats  = np.zeros((V, C), dtype=np.float32)
     counts = np.zeros(V,      dtype=np.float32)
     np.add.at(feats,  inv_map, all_feats)
@@ -172,11 +195,135 @@ def _voxelize(
     feats /= counts[:, None]
 
     coords = np.concatenate(
-        [np.zeros((V, 1), dtype=np.int32), unique_coords.astype(np.int32)],
+        [np.zeros((V, 1), dtype=np.int32), unique_vox.astype(np.int32)],
         axis=1,
     )
     return coords, feats, inv_map
 
+
+# ---------------------------------------------------------------------------
+# Forward pass helpers
+# ---------------------------------------------------------------------------
+
+def _forward_chunk(
+    model: SegmentAnyTree,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    intensity: np.ndarray | None,
+    classification: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Voxelise one chunk and run a single model forward pass.
+
+    Returns per-original-point arrays:
+      probs      : float32 (N, 2)
+      offsets    : float32 (N, 3)
+      embeddings : float32 (N, E)
+    """
+    coords, feats, inv_map = _voxelize_metric(x, y, z, intensity, classification)
+
+    vox_xyz = coords[:, 1:]
+    min_vox = vox_xyz.min(axis=0)
+    shifted = (vox_xyz - min_vox).astype(np.int32)
+    sp_shape = (shifted.max(axis=0) + 1).tolist()
+    indices = np.concatenate(
+        [np.zeros((len(shifted), 1), dtype=np.int32), shifted], axis=1
+    )
+
+    sparse_in = SparseConvTensor(
+        features=torch.from_numpy(feats).float(),
+        indices=torch.from_numpy(indices).int(),
+        spatial_shape=sp_shape,
+        batch_size=1,
+    )
+    with torch.no_grad():
+        out = model(sparse_in)
+
+    vox_probs = torch.softmax(out['semantic_logits'], dim=1).cpu().numpy()
+    vox_offs  = out['offsets'].cpu().numpy()
+    vox_embs  = out['embeddings'].cpu().numpy()
+
+    return vox_probs[inv_map], vox_offs[inv_map], vox_embs[inv_map]
+
+
+def _predict_with_tiling(
+    model: SegmentAnyTree,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    intensity: np.ndarray | None,
+    classification: np.ndarray | None,
+    version: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Sliding-window inference over large point clouds.
+
+    Tiles XY into overlapping _TILE_SIZE_M windows with _TILE_STEP_M step.
+    Returns (probs, offsets, embeddings) averaged over all covering tiles.
+    """
+    n = len(x)
+    accum_probs = np.zeros((n, 2), dtype=np.float64)
+    accum_offs  = np.zeros((n, 3), dtype=np.float64)
+    accum_embs  = None
+    count       = np.zeros(n, dtype=np.float64)
+
+    xmin, xmax = float(x.min()), float(x.max())
+    ymin, ymax = float(y.min()), float(y.max())
+
+    x_starts = np.arange(xmin, xmax, _TILE_STEP_M)
+    y_starts = np.arange(ymin, ymax, _TILE_STEP_M)
+    total    = len(x_starts) * len(y_starts)
+
+    print(f"[predictor:{version}] {xmax-xmin:.0f}m x {ymax-ymin:.0f}m -- "
+          f"sliding window ({total} tiles) ...")
+
+    done = 0
+    for xs in x_starts:
+        for ys in y_starts:
+            done += 1
+            mask = (
+                (x >= xs) & (x < xs + _TILE_SIZE_M) &
+                (y >= ys) & (y < ys + _TILE_SIZE_M)
+            )
+            idx = np.where(mask)[0]
+            if len(idx) < _MIN_TILE_PTS:
+                continue
+
+            tile_int = intensity[idx]      if intensity      is not None else None
+            tile_cls = classification[idx] if classification is not None else None
+
+            probs, offs, embs = _forward_chunk(
+                model, x[idx], y[idx], z[idx], tile_int, tile_cls
+            )
+
+            if accum_embs is None:
+                accum_embs = np.zeros((n, embs.shape[1]), dtype=np.float64)
+
+            accum_probs[idx] += probs
+            accum_offs[idx]  += offs
+            accum_embs[idx]  += embs
+            count[idx]       += 1
+
+            if done % 10 == 0 or done == total:
+                print(f"[predictor:{version}]   tile {done}/{total}")
+
+    uncovered = count == 0
+    if uncovered.any():
+        print(f"[predictor:{version}] WARNING: {uncovered.sum():,} points uncovered -- non-tree.")
+        accum_probs[uncovered, 0] = 1.0
+        count[uncovered]          = 1.0
+
+    c = count[:, None]
+    avg_probs = (accum_probs / c).astype(np.float32)
+    avg_offs  = (accum_offs  / c).astype(np.float32)
+    avg_embs  = (accum_embs  / c).astype(np.float32) if accum_embs is not None \
+                else np.zeros((n, 1), dtype=np.float32)
+
+    return avg_probs, avg_offs, avg_embs
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def predict(
     x: np.ndarray,
@@ -186,8 +333,7 @@ def predict(
     classification: np.ndarray | None = None,
     version: str = 'v1',
 ) -> np.ndarray:
-    """
-    Run per-point semantic prediction.
+    """Per-point semantic prediction.
 
     Args:
         x, y, z        : float32 (N,) world coordinates
@@ -196,7 +342,7 @@ def predict(
         version        : 'v1' | 'v2' | 'v3' | 'v4'
 
     Returns:
-        labels : int32 (N,) — 0=non-tree, 101=tree
+        labels : int32 (N,) -- 0=non-tree, 101=tree
     """
     if version not in _MODEL_CONFIGS:
         raise ValueError(f"Unknown version '{version}'. Choose from {VALID_VERSIONS}.")
@@ -209,30 +355,148 @@ def predict(
 
     model = _get_model(version)
 
-    print(f"[predictor:{version}] Voxelising {len(x):,} points ...")
-    coords, feats, inv_map = _voxelize(
-        x.astype(np.float64),
-        y.astype(np.float64),
-        z.astype(np.float64),
-        intensity      if cfg['use_intensity']      else None,
-        classification if cfg['use_classification'] else None,
-    )
-    print(f"[predictor:{version}] {len(coords):,} voxels → running inference ...")
+    x32  = x.astype(np.float32)
+    y32  = y.astype(np.float32)
+    z32  = z.astype(np.float32)
+    int_ = intensity.astype(np.float32)      if (intensity      is not None and cfg['use_intensity'])      else None
+    cls_ = classification.astype(np.float32) if (classification is not None and cfg['use_classification']) else None
 
-    sparse_input = ME.SparseTensor(
-        features    = torch.from_numpy(feats).float(),
-        coordinates = torch.from_numpy(coords).int(),
-    )
+    extent_x = float(x32.max() - x32.min())
+    extent_y = float(y32.max() - y32.min())
+    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m")
 
-    with torch.no_grad():
-        out = model(sparse_input)
+    if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
+        probs, _, _ = _forward_chunk(model, x32, y32, z32, int_, cls_)
+    else:
+        probs, _, _ = _predict_with_tiling(model, x32, y32, z32, int_, cls_, version)
 
-    voxel_labels = out['semantic_logits'].argmax(dim=1).cpu().numpy()
-    point_labels = voxel_labels[inv_map].astype(np.int32)
-
-    # Remap: 1=tree → 101 (tool label convention), 0=non-tree stays 0
-    point_labels[point_labels == 1] = 101
+    point_labels = probs.argmax(axis=1).astype(np.int32)
+    point_labels[point_labels == 1] = 101  # 1=tree -> 101
 
     print(f"[predictor:{version}] Done. "
           f"Counts: {dict(zip(*np.unique(point_labels, return_counts=True)))}")
     return point_labels
+
+
+def _cluster_instances(
+    coords: np.ndarray,
+    offsets: np.ndarray,
+    embeddings: np.ndarray,
+    bandwidth: float = 2.0,
+    min_points: int = 100,
+    embed_weight: float = 0.3,
+    max_spread: float = 5.0,
+) -> np.ndarray:
+    """Mean-shift clustering on offset-shifted XY + scaled embeddings.
+
+    Returns labels (1,2,... for trees; 0 = noise).
+    """
+    from sklearn.cluster import MeanShift, DBSCAN
+
+    shifted  = coords[:, :2] + offsets[:, :2]
+    features = np.hstack([shifted, embeddings * embed_weight])
+
+    ms = MeanShift(bandwidth=bandwidth, bin_seeding=True, n_jobs=-1)
+    ms.fit(features)
+    raw_labels = ms.labels_
+
+    labels      = np.zeros(len(coords), dtype=np.int32)
+    instance_id = 0
+
+    for cluster_id in np.unique(raw_labels):
+        mask     = raw_labels == cluster_id
+        mask_idx = np.where(mask)[0]
+
+        db = DBSCAN(eps=max_spread, min_samples=1, algorithm='ball_tree').fit(
+            coords[mask, :2]
+        )
+        comp_labels = db.labels_
+        unique_comps, comp_counts = np.unique(
+            comp_labels[comp_labels >= 0], return_counts=True
+        )
+        if len(unique_comps) == 0:
+            continue
+
+        keep = comp_labels == unique_comps[comp_counts.argmax()]
+        if keep.sum() < min_points:
+            continue
+
+        instance_id += 1
+        labels[mask_idx[keep]] = instance_id
+
+    return labels
+
+
+def predict_instances(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    intensity: np.ndarray | None = None,
+    classification: np.ndarray | None = None,
+    version: str = 'v1',
+    bandwidth: float = 2.0,
+    min_points: int = 100,
+    embed_weight: float = 0.3,
+    max_spread: float = 5.0,
+) -> np.ndarray:
+    """Per-point instance segmentation using all three model heads.
+
+    Args:
+        x, y, z        : float32 (N,) world coordinates
+        intensity      : float32 (N,) raw intensity (required for v3, v4)
+        classification : float32 (N,) ASPRS class  (required for v2, v4)
+        version        : 'v1' | 'v2' | 'v3' | 'v4'
+        bandwidth      : mean-shift bandwidth in metres
+        min_points     : minimum cluster size to be kept as a tree
+        embed_weight   : embedding vs XY weighting for clustering
+        max_spread     : DBSCAN eps for spatial coherence (metres)
+
+    Returns:
+        labels : int32 (N,) -- 0=non-tree, 201,202,...=tree instances
+    """
+    if version not in _MODEL_CONFIGS:
+        raise ValueError(f"Unknown version '{version}'. Choose from {VALID_VERSIONS}.")
+
+    cfg = _MODEL_CONFIGS[version]
+    if cfg['use_intensity'] and intensity is None:
+        raise ValueError(f"version='{version}' requires intensity values")
+    if cfg['use_classification'] and classification is None:
+        raise ValueError(f"version='{version}' requires classification values")
+
+    model = _get_model(version)
+
+    x32  = x.astype(np.float32)
+    y32  = y.astype(np.float32)
+    z32  = z.astype(np.float32)
+    int_ = intensity.astype(np.float32)      if (intensity      is not None and cfg['use_intensity'])      else None
+    cls_ = classification.astype(np.float32) if (classification is not None and cfg['use_classification']) else None
+
+    extent_x = float(x32.max() - x32.min())
+    extent_y = float(y32.max() - y32.min())
+    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m -- 3-head ...")
+
+    if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
+        pt_probs, pt_offs, pt_embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+    else:
+        pt_probs, pt_offs, pt_embs = _predict_with_tiling(
+            model, x32, y32, z32, int_, cls_, version)
+
+    tree_mask = pt_probs.argmax(axis=1) == 1
+    n_tree    = int(tree_mask.sum())
+    print(f"[predictor:{version}] {n_tree:,}/{len(x):,} tree pts -- clustering ...")
+
+    output = np.zeros(len(x), dtype=np.int32)
+
+    if n_tree > 0:
+        xyz_tree = np.stack([x, y, z], axis=1)[tree_mask]
+        inst_labels = _cluster_instances(
+            xyz_tree, pt_offs[tree_mask], pt_embs[tree_mask],
+            bandwidth=bandwidth, min_points=min_points,
+            embed_weight=embed_weight, max_spread=max_spread,
+        )
+        n_inst     = int(inst_labels.max()) if len(inst_labels) else 0
+        n_assigned = int((inst_labels > 0).sum())
+        print(f"[predictor:{version}] {n_inst} instances, {n_assigned:,} assigned")
+        output[tree_mask] = np.where(inst_labels > 0, 200 + inst_labels, 0)
+
+    return output
