@@ -1,14 +1,43 @@
 <template>
   <div class="inference-legend">
     <h3>Inference <span class="ver" v-if="versionLabel">({{ versionLabel }})</span></h3>
+
+    <!-- Legend swatches -->
     <div v-if="!store.predictionLegend.length" class="hint">No inference run yet</div>
     <div v-for="e in store.predictionLegend" :key="e.label" class="legend-row">
       <span class="swatch" :style="{ background: e.color }"></span>
-      <span class="lbl">{{ e.label }} — {{ e.name }}</span>
+      <span class="lbl">{{ e.label === 0 ? 'Non-tree' : e.name }}</span>
       <span class="cnt">{{ e.count.toLocaleString() }}</span>
     </div>
 
-    <!-- Inference edit — shown when a lasso selection is active -->
+    <!-- Result message -->
+    <p v-if="instMessage" class="info-msg">{{ instMessage }}</p>
+
+    <!-- Parameters toggle -->
+    <div class="section-header" @click="instParamsOpen = !instParamsOpen">
+      <span>⚙ Parameters</span>
+      <span class="chevron">{{ instParamsOpen ? '▲' : '▼' }}</span>
+    </div>
+    <div v-if="instParamsOpen" class="params-grid">
+      <label class="param-row">
+        <span class="param-name" title="Mean-shift bandwidth in metres — controls how far apart two tree centres can be and still merge into one cluster. Roughly equal to the maximum expected crown radius.">Bandwidth (m)</span>
+        <input v-model.number="instParams.bandwidth" type="number" min="0.5" max="20" step="0.5" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="Clusters with fewer points than this are discarded as noise.">Min pts / tree</span>
+        <input v-model.number="instParams.min_points" type="number" min="1" step="50" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="How much the 5-D embedding features contribute relative to shifted XY position. Higher = more embedding influence.">Embed weight</span>
+        <input v-model.number="instParams.embed_weight" type="number" min="0" max="2" step="0.05" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="DBSCAN eps for spatial coherence check (metres). Points further than this from the main cluster blob are demoted to background.">Max spread (m)</span>
+        <input v-model.number="instParams.max_spread" type="number" min="1" max="30" step="1" class="param-input" />
+      </label>
+    </div>
+
+    <!-- Lasso edit — shown when a lasso selection is active -->
     <div v-if="store.selectedIndices.length > 0 && store.inferenceLabels" class="inf-edit-section">
       <div class="inf-edit-header">{{ store.selectedIndices.length.toLocaleString() }} points selected</div>
       <div class="inf-edit-row">
@@ -23,205 +52,190 @@
       <button class="inf-edit-clear" @click="store.selectedIndices = []">Clear selection</button>
     </div>
 
-    <!-- Segmentation controls — shown once inference results exist -->
-    <div v-if="hasTreeLabel" class="segment-section">
-      <div class="section-header" @click="paramsOpen = !paramsOpen">
-        <span>Segmentation params</span>
-        <span class="header-right">
-          <span
-            class="help-btn"
-            @click.stop="helpOpen = !helpOpen"
-            :title="helpOpen ? 'Hide help' : 'What do these parameters do?'"
-          >?</span>
-          <span class="chevron">{{ paramsOpen ? '▲' : '▼' }}</span>
-        </span>
-      </div>
-
-      <div v-if="helpOpen" class="help-box">
-        <div class="help-row"><span class="help-name">Cell size</span><span class="help-desc">Size of each grid cell in metres. Smaller = more detail but slower. 1 m works well for most trees.</span></div>
-        <div class="help-row"><span class="help-name">Smooth window</span><span class="help-desc">Blurs the height model before finding tree tops. Higher = fewer false splits in dense canopy. Use 1 for isolated trees, 5+ for overlapping crowns.</span></div>
-        <div class="help-row"><span class="help-name">Extra Gauss σ</span><span class="help-desc">Extra smoothing on top of the window filter. Leave at 0 unless the canopy is very noisy.</span></div>
-        <div class="help-row"><span class="help-name">Min height</span><span class="help-desc">Points below this height (above ground) are ignored. Filters out low shrubs and ground clutter.</span></div>
-        <div class="help-row"><span class="help-name">Peak window</span><span class="help-desc">Minimum distance (in cells) between two tree tops. Prevents one big tree from being split into many. Roughly equal to the smallest expected crown radius.</span></div>
-        <div class="help-row"><span class="help-name">Min pts / tree</span><span class="help-desc">Trees with fewer points than this are merged into the nearest larger tree. Removes tiny over-split fragments.</span></div>
-        <div class="help-row"><span class="help-name">Min blob size</span><span class="help-desc">Isolated groups of canopy cells smaller than this are removed before segmentation. Cleans up scattered points from partially-visible trees at patch edges.</span></div>
-      </div>
-
-      <div v-if="paramsOpen" class="params-grid">
-        <!-- DTM source indicator -->
-        <div class="dtm-badge" :class="dtmSource === 'external' ? 'dtm-ok' : 'dtm-fallback'">
-          <span class="dtm-icon">{{ dtmSource === 'external' ? '✓' : '!' }}</span>
-          <span v-if="dtmSource === 'external'">Using DTM from point cloud view</span>
-          <span v-else>No ground points — using Z minimum fallback</span>
-        </div>
-
-        <label class="param-row">
-          <span class="param-name" title="CHM grid cell size in metres">Cell size (m)</span>
-          <input v-model.number="params.cell_size" type="number" min="0.1" max="5" step="0.1" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Duncanson uniform-filter window size (cells). Paper default: 5. Larger = smoother CHM, fewer over-split crowns.">Smooth window (cells)</span>
-          <input v-model.number="params.smooth_window" type="number" min="1" max="21" step="2" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Optional extra Gaussian σ applied after the uniform filter (0 = off). Use only for very noisy data.">Extra Gauss σ (cells)</span>
-          <input v-model.number="params.smooth_sigma" type="number" min="0" max="10" step="0.5" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Minimum CHM height in metres for a local maximum to be kept as a tree top">Min height (m)</span>
-          <input v-model.number="params.min_height" type="number" min="0.5" max="30" step="0.5" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Size of the neighbourhood (in cells) used for local maximum detection. Controls minimum separation between tree tops.">Peak window (cells)</span>
-          <input v-model.number="params.min_distance" type="number" min="1" max="50" step="1" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Maximum XY distance (metres) from a seed peak to assign a tree point. Points beyond this are assigned to the nearest ungrouped cluster.">Max radius (m)</span>
-          <input v-model.number="params.max_radius" type="number" min="1" max="50" step="1" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Instances with fewer points than this are merged into the nearest valid (larger) tree.">Min pts / tree</span>
-          <input v-model.number="params.min_tree_points" type="number" min="1" step="50" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Canopy blobs smaller than this many CHM cells are treated as noise (isolated scatter from partially-visible trees). 0 = disabled. At cell size 1 m, ~20–50 cells ≈ a 5–8 m radius patch.">Min blob size (cells)</span>
-          <input v-model.number="params.min_crown_cells" type="number" min="0" step="5" class="param-input" />
-        </label>
-      </div>
-
-      <button
-        class="autotune-btn"
-        :disabled="autoTuning || store.segmenting || applying"
-        @click="runAutoTune"
-        title="Run Bayesian optimisation (~30 trials, 1–3 min) to find best segmentation params"
-      >
-        {{ autoTuning ? 'Tuning…' : 'Auto-tune Params' }}
-      </button>
-      <div v-if="autoTuneScore !== null" class="autotune-note">
-        Score: {{ autoTuneScore.toFixed(3) }} ({{ autoTuneMode }}) — params updated ↑ click Segment to apply
-      </div>
-
-      <button
-        class="training-btn"
-        :disabled="savingTraining || !store.inferenceLabels"
-        @click="saveTrainingExample"
-        title="Save this patch's corrected segmentation as a training example for future auto-tune runs"
-      >
-        {{ savingTraining ? 'Saving…' : 'Save as Training Example' }}
-      </button>
-      <div v-if="trainingMessage" class="training-note">{{ trainingMessage }}</div>
-
-      <button
-        class="segment-btn"
-        :disabled="store.segmenting || applying"
-        @click="runSegmentation"
-        title="Cluster tree points into individual instances using CHM local maxima"
-      >
-        {{ store.segmenting ? 'Segmenting…' : 'Segment Tree Instances' }}
-      </button>
-    </div>
-
-    <!-- Marker legend (shown once segmentation has been run) -->
-    <div v-if="store.segmentationSeedPeaks.length" class="marker-legend">
-      <span class="marker-dot seed-dot"></span>
-      <span class="marker-text">CHM seed (watershed start) — {{ store.segmentationSeedPeaks.length }}</span>
-    </div>
-    <div v-if="store.segmentationPeaks.length" class="marker-legend">
-      <span class="marker-dot valid-dot"></span>
-      <span class="marker-text">Valid tree top (after merge) — {{ store.segmentationPeaks.length }}</span>
-    </div>
-
-    <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
-
-    <!-- Crown metrics -->
+    <!-- Primary action -->
     <button
-      v-if="store.segmentationPeaks.length"
-      class="metrics-btn"
-      :disabled="metricsLoading"
-      @click="runMetrics"
-    >{{ metricsLoading ? 'Calculating…' : 'Calculate Crown Metrics' }}</button>
+      class="inst-btn"
+      :disabled="instRunning || store.segmenting || applying"
+      @click="runInstanceSegmentation"
+      title="Run 3-head model (offset + embedding + semantic) for best instance segmentation"
+    >
+      {{ instRunning ? 'Running…' : 'Run Instance Segmentation' }}
+    </button>
 
-    <div v-if="treeMetrics.length" class="metrics-section">
-      <div class="metrics-header">
-        <span>Crown metrics — {{ treeMetrics.length }} trees</span>
-        <button class="metrics-close" @click="treeMetrics = []">✕</button>
-      </div>
-      <div v-if="dtmSource !== 'external'" class="metrics-warn">
-        No ground points — heights may be inaccurate
-      </div>
-      <div class="metrics-scroll">
-        <table class="metrics-table">
-          <thead>
-            <tr>
-              <th title="Tree instance number">#</th>
-              <th title="Maximum height above terrain (m). Requires accurate ground points for a correct DTM.">Ht (m)</th>
-              <th title="Crown base height: 10th-percentile of point heights above terrain (m)">Hb (m)</th>
-              <th title="Live crown length: Ht − Hb (m)">Lc (m)</th>
-              <th title="Crown width: diameter of a circle with the same area as the crown footprint — 2√(CA/π). More reliable than raw E-W/N-S extent which is skewed by outlier points.">CW (m)</th>
-              <th title="Crown footprint area: number of occupied 1m² CHM cells (m²)">CA (m²)</th>
-              <th title="Number of LiDAR points in the tree">Pts</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="t in treeMetrics" :key="t.id">
-              <td>{{ t.id - 200 }}</td>
-              <td>{{ t.height }}</td>
-              <td>{{ t.base_height }}</td>
-              <td>{{ t.crown_length }}</td>
-              <td>{{ t.crown_width }}</td>
-              <td>{{ t.crown_area }}</td>
-              <td>{{ t.point_count.toLocaleString() }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Instance segmentation via 3-head model (offset + embedding + mean-shift) -->
-    <div class="inst-section">
-      <div class="section-header" @click="instParamsOpen = !instParamsOpen">
-        <span>Instance segmentation (3-head)</span>
-        <span class="chevron">{{ instParamsOpen ? '▲' : '▼' }}</span>
-      </div>
-      <div v-if="instParamsOpen" class="params-grid">
-        <label class="param-row">
-          <span class="param-name" title="Mean-shift bandwidth in metres — controls how far apart two tree centres can be and still merge into one cluster. Roughly equal to the maximum expected crown radius.">Bandwidth (m)</span>
-          <input v-model.number="instParams.bandwidth" type="number" min="0.5" max="20" step="0.5" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="Clusters with fewer points than this are discarded as noise.">Min pts / tree</span>
-          <input v-model.number="instParams.min_points" type="number" min="1" step="50" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="How much the 5-D embedding features contribute relative to shifted XY position. Higher = more embedding influence.">Embed weight</span>
-          <input v-model.number="instParams.embed_weight" type="number" min="0" max="2" step="0.05" class="param-input" />
-        </label>
-        <label class="param-row">
-          <span class="param-name" title="DBSCAN eps for spatial coherence check (metres). Points further than this from the main cluster blob are demoted to background.">Max spread (m)</span>
-          <input v-model.number="instParams.max_spread" type="number" min="1" max="30" step="1" class="param-input" />
-        </label>
-      </div>
-      <button
-        class="inst-btn"
-        :disabled="instRunning || store.segmenting || applying"
-        @click="runInstanceSegmentation"
-        title="Run offset+embedding heads then mean-shift clustering — no CHM step"
-      >
-        {{ instRunning ? 'Running…' : 'Run Instance Segmentation' }}
-      </button>
-      <p v-if="instMessage" class="info-msg">{{ instMessage }}</p>
-    </div>
-
+    <!-- Apply to Labels -->
     <button
       v-if="store.predictionLegend.length"
       class="apply-btn"
-      :disabled="applying || store.segmenting"
+      :disabled="applying || store.segmenting || instRunning"
       @click="applyToLabels"
       title="Write inference results into the Labels layer so they can be saved"
     >
       {{ applying ? 'Applying…' : 'Apply to Labels' }}
     </button>
     <p v-if="applied" class="ok">Applied — switch to Labels view to verify</p>
+
+    <!-- ── Advanced section ─────────────────────────────────────────── -->
+    <div class="advanced-header" @click="advancedOpen = !advancedOpen">
+      <span>Advanced</span>
+      <span class="chevron">{{ advancedOpen ? '▲' : '▼' }}</span>
+    </div>
+
+    <div v-if="advancedOpen" class="advanced-body">
+      <!-- CHM Watershed segmentation -->
+      <div class="subsection-label">CHM Watershed</div>
+
+      <div v-if="hasSemanticLabels" class="segment-section">
+        <div class="section-header" @click="paramsOpen = !paramsOpen">
+          <span>CHM params</span>
+          <span class="header-right">
+            <span
+              class="help-btn"
+              @click.stop="helpOpen = !helpOpen"
+              :title="helpOpen ? 'Hide help' : 'What do these parameters do?'"
+            >?</span>
+            <span class="chevron">{{ paramsOpen ? '▲' : '▼' }}</span>
+          </span>
+        </div>
+
+        <div v-if="helpOpen" class="help-box">
+          <div class="help-row"><span class="help-name">Cell size</span><span class="help-desc">Size of each grid cell in metres. Smaller = more detail but slower. 1 m works well for most trees.</span></div>
+          <div class="help-row"><span class="help-name">Smooth window</span><span class="help-desc">Blurs the height model before finding tree tops. Higher = fewer false splits in dense canopy.</span></div>
+          <div class="help-row"><span class="help-name">Extra Gauss σ</span><span class="help-desc">Extra smoothing on top of the window filter. Leave at 0 unless the canopy is very noisy.</span></div>
+          <div class="help-row"><span class="help-name">Min height</span><span class="help-desc">Points below this height (above ground) are ignored. Filters out low shrubs and ground clutter.</span></div>
+          <div class="help-row"><span class="help-name">Peak window</span><span class="help-desc">Minimum distance (in cells) between two tree tops. Roughly equal to the smallest expected crown radius.</span></div>
+          <div class="help-row"><span class="help-name">Min pts / tree</span><span class="help-desc">Trees with fewer points than this are merged into the nearest larger tree.</span></div>
+          <div class="help-row"><span class="help-name">Min blob size</span><span class="help-desc">Isolated groups of canopy cells smaller than this are removed before segmentation.</span></div>
+        </div>
+
+        <div v-if="paramsOpen" class="params-grid">
+          <!-- DTM source indicator -->
+          <div class="dtm-badge" :class="dtmSource === 'external' ? 'dtm-ok' : 'dtm-fallback'">
+            <span class="dtm-icon">{{ dtmSource === 'external' ? '✓' : '!' }}</span>
+            <span v-if="dtmSource === 'external'">Using DTM from point cloud view</span>
+            <span v-else>No ground points — using Z minimum fallback</span>
+          </div>
+          <label class="param-row">
+            <span class="param-name" title="CHM grid cell size in metres">Cell size (m)</span>
+            <input v-model.number="params.cell_size" type="number" min="0.1" max="5" step="0.1" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Duncanson uniform-filter window size (cells)">Smooth window (cells)</span>
+            <input v-model.number="params.smooth_window" type="number" min="1" max="21" step="2" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Optional extra Gaussian σ (0 = off)">Extra Gauss σ (cells)</span>
+            <input v-model.number="params.smooth_sigma" type="number" min="0" max="10" step="0.5" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Minimum CHM height in metres">Min height (m)</span>
+            <input v-model.number="params.min_height" type="number" min="0.5" max="30" step="0.5" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Neighbourhood size for local maximum detection">Peak window (cells)</span>
+            <input v-model.number="params.min_distance" type="number" min="1" max="50" step="1" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Maximum XY distance from seed to assign a point">Max radius (m)</span>
+            <input v-model.number="params.max_radius" type="number" min="1" max="50" step="1" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Instances with fewer points are merged into nearest larger tree">Min pts / tree</span>
+            <input v-model.number="params.min_tree_points" type="number" min="1" step="50" class="param-input" />
+          </label>
+          <label class="param-row">
+            <span class="param-name" title="Canopy blobs smaller than this (CHM cells) are treated as noise">Min blob size (cells)</span>
+            <input v-model.number="params.min_crown_cells" type="number" min="0" step="5" class="param-input" />
+          </label>
+        </div>
+
+        <button
+          class="autotune-btn"
+          :disabled="autoTuning || store.segmenting || applying"
+          @click="runAutoTune"
+          title="Run Bayesian optimisation (~30 trials, 1–3 min) to find best segmentation params"
+        >
+          {{ autoTuning ? 'Tuning…' : 'Auto-tune Params' }}
+        </button>
+        <div v-if="autoTuneScore !== null" class="autotune-note">
+          Score: {{ autoTuneScore.toFixed(3) }} ({{ autoTuneMode }}) — params updated ↑ click Segment to apply
+        </div>
+
+        <button
+          class="training-btn"
+          :disabled="savingTraining || !store.inferenceLabels"
+          @click="saveTrainingExample"
+          title="Save this patch's corrected segmentation as a training example"
+        >
+          {{ savingTraining ? 'Saving…' : 'Save as Training Example' }}
+        </button>
+        <div v-if="trainingMessage" class="training-note">{{ trainingMessage }}</div>
+
+        <button
+          class="segment-btn"
+          :disabled="store.segmenting || applying"
+          @click="runSegmentation"
+          title="Cluster tree points into individual instances using CHM local maxima"
+        >
+          {{ store.segmenting ? 'Segmenting…' : 'Segment Trees (CHM)' }}
+        </button>
+        <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
+      </div>
+      <div v-else class="hint">Run inference first to enable CHM segmentation</div>
+
+      <!-- CHM marker legend -->
+      <div v-if="store.segmentationSeedPeaks.length" class="marker-legend">
+        <span class="marker-dot seed-dot"></span>
+        <span class="marker-text">CHM seed (watershed start) — {{ store.segmentationSeedPeaks.length }}</span>
+      </div>
+      <div v-if="store.segmentationPeaks.length" class="marker-legend">
+        <span class="marker-dot valid-dot"></span>
+        <span class="marker-text">Valid tree top (after merge) — {{ store.segmentationPeaks.length }}</span>
+      </div>
+
+      <!-- Crown metrics -->
+      <button
+        v-if="store.segmentationPeaks.length"
+        class="metrics-btn"
+        :disabled="metricsLoading"
+        @click="runMetrics"
+      >{{ metricsLoading ? 'Calculating…' : 'Calculate Crown Metrics' }}</button>
+
+      <div v-if="treeMetrics.length" class="metrics-section">
+        <div class="metrics-header">
+          <span>Crown metrics — {{ treeMetrics.length }} trees</span>
+          <button class="metrics-close" @click="treeMetrics = []">✕</button>
+        </div>
+        <div v-if="dtmSource !== 'external'" class="metrics-warn">
+          No ground points — heights may be inaccurate
+        </div>
+        <div class="metrics-scroll">
+          <table class="metrics-table">
+            <thead>
+              <tr>
+                <th title="Tree instance number">#</th>
+                <th title="Maximum height above terrain (m)">Ht (m)</th>
+                <th title="Crown base height: 10th-percentile of point heights above terrain (m)">Hb (m)</th>
+                <th title="Live crown length: Ht − Hb (m)">Lc (m)</th>
+                <th title="Crown width: diameter of a circle with the same area as the crown footprint">CW (m)</th>
+                <th title="Crown footprint area (m²)">CA (m²)</th>
+                <th title="Number of LiDAR points in the tree">Pts</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in treeMetrics" :key="t.id">
+                <td>{{ t.id - 200 }}</td>
+                <td>{{ t.height }}</td>
+                <td>{{ t.base_height }}</td>
+                <td>{{ t.crown_length }}</td>
+                <td>{{ t.crown_width }}</td>
+                <td>{{ t.crown_area }}</td>
+                <td>{{ t.point_count.toLocaleString() }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -236,27 +250,28 @@ const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-appli
 const route = useRoute()
 const store = usePatch3DStore()
 
-const VERSION_LABELS = { v1: 'XYZ', v2: 'XYZ+C', v3: 'XYZ+I', v4: 'XYZ+I+C' }
+const VERSION_LABELS = { finetune: 'Finetune — XYZ', finetune_int: 'Finetune — XYZ+I', scratch: 'Scratch — XYZ', scratch_int: 'Scratch — XYZ+I' }
 const versionLabel = computed(() => VERSION_LABELS[store.inferenceVersion] ?? '')
 
 const applying        = ref(false)
 const applied         = ref(false)
-const instanceMessage = ref('')
+const instRunning     = ref(false)
+const instMessage     = ref('')
+const instParamsOpen  = ref(false)
+const advancedOpen    = ref(false)
 const paramsOpen      = ref(false)
+const helpOpen        = ref(false)
 const autoTuning      = ref(false)
 const autoTuneScore   = ref(null)
 const autoTuneMode    = ref('')
-const helpOpen        = ref(false)
 const metricsLoading  = ref(false)
 const treeMetrics     = ref([])
-const savingTraining    = ref(false)
-const trainingMessage   = ref('')
-const inferenceEditLabel = ref(0)   // target instance label for lasso reassignment
+const instanceMessage = ref('')
+const savingTraining  = ref(false)
+const trainingMessage = ref('')
+const inferenceEditLabel = ref(0)
 
-// Instance segmentation (3-head)
-const instRunning    = ref(false)
-const instMessage    = ref('')
-const instParamsOpen = ref(false)
+// Instance segmentation params (3-head)
 const instParams = reactive({
   bandwidth:    2.0,
   min_points:   100,
@@ -264,7 +279,7 @@ const instParams = reactive({
   max_spread:   5.0,
 })
 
-// Segmentation hyperparameters — all editable via UI
+// CHM segmentation hyperparameters
 const params = reactive({
   cell_size:        1.5,
   smooth_window:    1,
@@ -276,13 +291,11 @@ const params = reactive({
   min_crown_cells:  70,
 })
 
-// Show segment controls as long as we have inference data
-const hasTreeLabel = computed(() => store.inferenceLabels !== null)
-
-// DTM source indicator: 'external' when the point cloud view has ground points
+// CHM requires semantic labels (0/101) — available after either flow
+const hasSemanticLabels = computed(() => store.semanticLabels !== null)
 const dtmSource = computed(() => store.dtmGrid ? 'external' : 'fallback')
 
-// Mirrors paletteColor() in usePointCloud3D.js / _paletteHex() in CanvasRenderer3D.vue
+// Mirrors paletteColor() in usePointCloud3D.js
 function _paletteHex(labelValue) {
   let r, g, b
   if (labelValue === 0) { r = 0.28; g = 0.28; b = 0.32 }
@@ -312,7 +325,6 @@ function applyInferenceLabel(targetLabel) {
   for (const i of store.selectedIndices) newLabels[i] = targetLabel
   store.inferenceLabels = newLabels
 
-  // Rebuild legend counts
   const counts = {}
   for (const lbl of newLabels) counts[lbl] = (counts[lbl] || 0) + 1
   store.predictionLegend = store.predictionLegend
@@ -323,6 +335,50 @@ function applyInferenceLabel(targetLabel) {
   emit('inference-edited', newLabels)
 }
 
+async function runInstanceSegmentation() {
+  if (instRunning.value) return
+  instRunning.value = true
+  instMessage.value = ''
+  applied.value = false
+  store.segmentationPeaks = []
+  store.segmentationSeedPeaks = []
+  try {
+    const res = await predictInstances(
+      route.params.id,
+      route.params.patchId,
+      store.inferenceVersion,
+      instParams,
+    )
+    const { labels, n_instances } = res.data
+    store.inferenceLabels = labels
+    // Synthesise semantic labels for CHM (Advanced): instance >= 201 → 101 (tree), else 0
+    store.semanticLabels = labels.map(l => l >= 201 ? 101 : 0)
+
+    const counts = {}
+    for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
+
+    store.predictionLegend = Object.entries(counts)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([lbl, count]) => ({
+        label: Number(lbl),
+        name:  Number(lbl) === 0 ? 'Non-tree' : `Tree #${Number(lbl) - 200}`,
+        color: _paletteHex(Number(lbl)),
+        count,
+      }))
+
+    instMessage.value = n_instances === 0
+      ? 'No instances found'
+      : `${n_instances} tree instance${n_instances > 1 ? 's' : ''} found`
+
+    emit('segment-done', labels)
+  } catch (err) {
+    console.error('Instance segmentation failed:', err)
+    instMessage.value = `Failed: ${err.response?.data?.detail ?? err.message}`
+  } finally {
+    instRunning.value = false
+  }
+}
+
 async function runSegmentation() {
   if (!store.semanticLabels || store.segmenting) return
   store.segmenting = true
@@ -331,14 +387,13 @@ async function runSegmentation() {
   store.segmentationPeaks = []
   store.segmentationSeedPeaks = []
   try {
-    // Build request payload — include DTM grid from point cloud view if available
     const payload = { ...params }
     if (store.dtmGrid) {
-      payload.dtm_grid   = store.dtmGrid.grid
-      payload.dtm_rows   = store.dtmGrid.rows
-      payload.dtm_cols   = store.dtmGrid.cols
-      payload.dtm_x_min  = store.dtmGrid.xMin
-      payload.dtm_y_min  = store.dtmGrid.yMin
+      payload.dtm_grid    = store.dtmGrid.grid
+      payload.dtm_rows    = store.dtmGrid.rows
+      payload.dtm_cols    = store.dtmGrid.cols
+      payload.dtm_x_min   = store.dtmGrid.xMin
+      payload.dtm_y_min   = store.dtmGrid.yMin
       payload.dtm_x_range = store.dtmGrid.xRange
       payload.dtm_y_range = store.dtmGrid.yRange
     }
@@ -346,7 +401,7 @@ async function runSegmentation() {
     const res = await segmentTrees(
       route.params.id,
       route.params.patchId,
-      Array.from(store.semanticLabels),   // always use original 0/101 labels
+      Array.from(store.semanticLabels),
       payload,
     )
     const { labels, tree_count } = res.data
@@ -355,7 +410,6 @@ async function runSegmentation() {
     store.segmentationPeaks     = res.data.peaks
     store.segmentationSeedPeaks = res.data.seed_peaks ?? []
 
-    // Rebuild legend with instance entries
     const counts = {}
     for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
 
@@ -377,15 +431,12 @@ async function runSegmentation() {
       tree_count === 0 ? 'No tree instances found' :
       tree_count === 1 ? '1 tree instance found' :
       `${tree_count} tree instances found`
+    if (tree_count > 0)
+      instanceMessage.value += ` — ${store.segmentationSeedPeaks.length} CHM seeds, ${store.segmentationPeaks.length} valid peaks`
 
     emit('segment-done', labels)
-    // Scroll info into view
-    instanceMessage.value +=
-      tree_count > 0
-        ? ` — ${store.segmentationSeedPeaks.length} CHM seeds (yellow), ${store.segmentationPeaks.length} valid peaks (red)`
-        : ''
   } catch (err) {
-    console.error('Segmentation failed:', err)
+    console.error('CHM segmentation failed:', err)
     instanceMessage.value = 'Segmentation failed — see console'
   } finally {
     store.segmenting = false
@@ -454,48 +505,6 @@ async function runMetrics() {
   }
 }
 
-async function runInstanceSegmentation() {
-  if (instRunning.value) return
-  instRunning.value = true
-  instMessage.value = ''
-  applied.value = false
-  store.segmentationPeaks = []
-  store.segmentationSeedPeaks = []
-  try {
-    const res = await predictInstances(
-      route.params.id,
-      route.params.patchId,
-      store.inferenceVersion,
-      instParams,
-    )
-    const { labels, n_instances } = res.data
-    store.inferenceLabels = labels
-
-    const counts = {}
-    for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
-
-    store.predictionLegend = Object.entries(counts)
-      .sort(([a], [b]) => Number(a) - Number(b))
-      .map(([lbl, count]) => ({
-        label: Number(lbl),
-        name:  Number(lbl) === 0 ? 'Non-tree' : `Tree #${Number(lbl) - 200}`,
-        color: _paletteHex(Number(lbl)),
-        count,
-      }))
-
-    instMessage.value = n_instances === 0
-      ? 'No instances found'
-      : `${n_instances} tree instance${n_instances > 1 ? 's' : ''} found`
-
-    emit('segment-done', labels)
-  } catch (err) {
-    console.error('Instance segmentation failed:', err)
-    instMessage.value = `Failed: ${err.response?.data?.detail ?? err.message}`
-  } finally {
-    instRunning.value = false
-  }
-}
-
 async function applyToLabels() {
   if (!store.predictionLegend.length) return
   applying.value = true
@@ -532,24 +541,20 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 }
 .lbl { flex: 1; color: #cce; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cnt { color: #556; font-size: 11px; white-space: nowrap; }
-.hint { font-size: 12px; color: #556; }
+.hint { font-size: 12px; color: #556; margin-bottom: 6px; }
 .ver { font-size: 11px; color: #778; font-weight: normal; }
 
-/* ── Segmentation section ─────────────────────────────────────── */
-.segment-section {
-  margin-top: 10px;
-  display: flex; flex-direction: column; gap: 6px;
-}
-
+/* ── Section headers ──────────────────────────────────────────── */
 .section-header {
   display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; color: #88a; cursor: pointer;
   padding: 4px 0; border-bottom: 1px solid #223;
-  user-select: none;
+  user-select: none; margin: 8px 0 4px;
 }
 .section-header:hover { color: #aad; }
 .header-right { display: flex; align-items: center; gap: 6px; }
 .chevron { font-size: 10px; }
+
 .help-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: 14px; height: 14px; border-radius: 50%;
@@ -562,22 +567,73 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .help-box {
   background: #0a1020; border: 1px solid #2a3050;
   border-radius: 5px; padding: 8px 10px;
-  display: flex; flex-direction: column; gap: 6px;
+  display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px;
 }
 .help-row { display: flex; gap: 8px; font-size: 10px; line-height: 1.4; }
-.help-name {
-  color: #99c; font-weight: 600; white-space: nowrap;
-  min-width: 80px; flex-shrink: 0;
-}
+.help-name { color: #99c; font-weight: 600; white-space: nowrap; min-width: 80px; flex-shrink: 0; }
 .help-desc { color: #778; }
 
+/* ── Params grid ──────────────────────────────────────────────── */
 .params-grid {
   display: flex; flex-direction: column; gap: 4px;
   background: #0e1220; border: 1px solid #223;
-  border-radius: 5px; padding: 8px 10px;
+  border-radius: 5px; padding: 8px 10px; margin-bottom: 8px;
+}
+.param-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: #88a; gap: 6px;
+}
+.param-name { flex: 1; cursor: help; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.param-input {
+  width: 68px; background: #1e2840; color: #eee;
+  border: 1px solid #445; border-radius: 4px;
+  padding: 3px 6px; font-size: 11px; text-align: right; flex-shrink: 0;
+}
+.param-input:focus { outline: none; border-color: #6a9adf; }
+
+/* ── Primary action button ────────────────────────────────────── */
+.inst-btn {
+  width: 100%; padding: 9px; margin-top: 4px;
+  background: #1a3a5e; border: 1px solid #3a6aae;
+  border-radius: 5px; color: #adf; cursor: pointer; font-size: 13px; font-weight: 600;
+}
+.inst-btn:hover:not(:disabled) { background: #2a4e80; }
+.inst-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ── Apply button ─────────────────────────────────────────────── */
+.apply-btn {
+  margin-top: 6px; width: 100%; padding: 8px;
+  background: #2a4a6e; border: 1px solid #4a7aae;
+  border-radius: 5px; color: #adf; cursor: pointer; font-size: 12px;
+}
+.apply-btn:hover:not(:disabled) { background: #3a5a8e; }
+.apply-btn:disabled { opacity: 0.4; cursor: default; }
+
+.info-msg { margin-top: 6px; font-size: 11px; color: #8cf; }
+.ok { margin-top: 6px; font-size: 11px; color: #6c6; }
+
+/* ── Advanced section ─────────────────────────────────────────── */
+.advanced-header {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: #668; cursor: pointer;
+  padding: 6px 0; border-top: 1px solid #1a2030; margin-top: 12px;
+  user-select: none; letter-spacing: 0.5px; text-transform: uppercase;
+}
+.advanced-header:hover { color: #99b; }
+
+.advanced-body {
+  padding: 6px 0;
+  display: flex; flex-direction: column; gap: 6px;
 }
 
-/* DTM source badge */
+.subsection-label {
+  font-size: 10px; color: #557; text-transform: uppercase;
+  letter-spacing: 0.6px; margin-top: 4px; margin-bottom: 2px;
+}
+
+/* ── CHM segment section (inside Advanced) ────────────────────── */
+.segment-section { display: flex; flex-direction: column; gap: 6px; }
+
 .dtm-badge {
   display: flex; align-items: center; gap: 6px;
   font-size: 10px; padding: 4px 8px;
@@ -586,22 +642,6 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .dtm-ok       { background: #0d2a18; color: #6c6; border: 1px solid #2a6a3a; }
 .dtm-fallback { background: #2a1a08; color: #c84; border: 1px solid #6a3a10; }
 .dtm-icon { font-weight: bold; }
-
-.param-row {
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 11px; color: #88a; gap: 6px;
-}
-.param-name {
-  flex: 1; cursor: help;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.param-input {
-  width: 68px; background: #1e2840; color: #eee;
-  border: 1px solid #445; border-radius: 4px;
-  padding: 3px 6px; font-size: 11px; text-align: right;
-  flex-shrink: 0;
-}
-.param-input:focus { outline: none; border-color: #6a9adf; }
 
 .segment-btn {
   width: 100%; padding: 8px;
@@ -624,38 +664,32 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   border-radius: 4px; padding: 4px 8px; margin-bottom: 6px;
 }
 
-.apply-btn {
-  margin-top: 6px; width: 100%; padding: 8px;
-  background: #2a4a6e; border: 1px solid #4a7aae;
-  border-radius: 5px; color: #adf; cursor: pointer; font-size: 12px;
+.training-btn {
+  width: 100%; padding: 7px; margin-bottom: 4px;
+  background: #1e3828; border: 1px solid #3a7a4e;
+  border-radius: 5px; color: #9c9; cursor: pointer; font-size: 12px;
 }
-.apply-btn:hover:not(:disabled) { background: #3a5a8e; }
-.apply-btn:disabled { opacity: 0.4; cursor: default; }
+.training-btn:hover:not(:disabled) { background: #2a4e38; }
+.training-btn:disabled { opacity: 0.4; cursor: default; }
+.training-note {
+  font-size: 10px; color: #8d8; text-align: center;
+  background: #0a1e14; border: 1px solid #2a5a38;
+  border-radius: 4px; padding: 4px 8px; margin-bottom: 6px;
+}
+
+/* ── CHM marker legend ────────────────────────────────────────── */
 .marker-legend {
   display: flex; align-items: center; gap: 6px;
-  font-size: 11px; color: #889; margin-top: 4px;
+  font-size: 11px; color: #889;
 }
-.marker-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-}
+.marker-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .seed-dot  { background: #ffcc00; box-shadow: 0 0 4px #ffcc00; }
 .valid-dot { background: #ff3030; box-shadow: 0 0 4px #ff4040; }
 .marker-text { color: #778; }
 
-.inst-section { margin-top: 10px; border-top: 1px solid #334; padding-top: 10px; }
-.inst-btn {
-  width: 100%; padding: 8px; margin-top: 6px;
-  background: #1e2e4e; border: 1px solid #4a6aae;
-  border-radius: 5px; color: #adf; cursor: pointer; font-size: 12px;
-}
-.inst-btn:hover:not(:disabled) { background: #2a3e6e; }
-.inst-btn:disabled { opacity: 0.4; cursor: default; }
-.info-msg { margin-top: 6px; font-size: 11px; color: #8cf; }
-.ok { margin-top: 6px; font-size: 11px; color: #6c6; }
-
 /* ── Crown metrics ────────────────────────────────────────────── */
 .metrics-btn {
-  margin-top: 6px; width: 100%; padding: 7px;
+  width: 100%; padding: 7px;
   background: #1a3a4a; border: 1px solid #3a7a9a;
   border-radius: 5px; color: #9df; cursor: pointer; font-size: 12px;
 }
@@ -663,7 +697,6 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .metrics-btn:disabled { opacity: 0.4; cursor: default; }
 
 .metrics-section {
-  margin-top: 8px;
   background: #0a1020; border: 1px solid #2a3050;
   border-radius: 5px; overflow: hidden;
 }
@@ -672,20 +705,11 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   padding: 5px 8px; background: #111828;
   font-size: 11px; color: #99c;
 }
-.metrics-close {
-  background: none; border: none; color: #556; cursor: pointer;
-  font-size: 11px; padding: 0 2px; line-height: 1;
-}
+.metrics-close { background: none; border: none; color: #556; cursor: pointer; font-size: 11px; padding: 0 2px; }
 .metrics-close:hover { color: #aac; }
-.metrics-warn {
-  font-size: 10px; color: #c84; background: #1a0e04;
-  padding: 4px 8px; border-bottom: 1px solid #2a1a08;
-}
+.metrics-warn { font-size: 10px; color: #c84; background: #1a0e04; padding: 4px 8px; border-bottom: 1px solid #2a1a08; }
 .metrics-scroll { overflow-x: auto; max-height: 220px; overflow-y: auto; }
-.metrics-table {
-  width: 100%; border-collapse: collapse;
-  font-size: 10px; color: #ccd;
-}
+.metrics-table { width: 100%; border-collapse: collapse; font-size: 10px; color: #ccd; }
 .metrics-table th {
   position: sticky; top: 0;
   background: #151e30; color: #889; font-weight: 600;
@@ -693,14 +717,11 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   border-bottom: 1px solid #2a3050; cursor: help;
 }
 .metrics-table th:first-child { text-align: center; }
-.metrics-table td {
-  padding: 3px 5px; text-align: right;
-  border-bottom: 1px solid #161e2e;
-}
+.metrics-table td { padding: 3px 5px; text-align: right; border-bottom: 1px solid #161e2e; }
 .metrics-table td:first-child { text-align: center; color: #99c; font-weight: 600; }
 .metrics-table tbody tr:hover { background: #141c2c; }
 
-/* ── Inference edit (lasso reassignment) ──────────────────────── */
+/* ── Lasso edit ───────────────────────────────────────────────── */
 .inf-edit-section {
   margin: 8px 0; padding: 8px 10px;
   background: #1a1a2e; border: 1px solid #4a4a7a;
@@ -718,22 +739,6 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   border-radius: 4px; color: #aaf; cursor: pointer; font-size: 11px; white-space: nowrap;
 }
 .inf-edit-apply:hover { background: #3a3a7e; }
-.inf-edit-clear {
-  font-size: 10px; color: #667; background: none; border: none;
-  cursor: pointer; text-align: left; padding: 0;
-}
+.inf-edit-clear { font-size: 10px; color: #667; background: none; border: none; cursor: pointer; text-align: left; padding: 0; }
 .inf-edit-clear:hover { color: #99b; }
-
-.training-btn {
-  width: 100%; padding: 7px; margin-bottom: 4px;
-  background: #1e3828; border: 1px solid #3a7a4e;
-  border-radius: 5px; color: #9c9; cursor: pointer; font-size: 12px;
-}
-.training-btn:hover:not(:disabled) { background: #2a4e38; }
-.training-btn:disabled { opacity: 0.4; cursor: default; }
-.training-note {
-  font-size: 10px; color: #8d8; text-align: center;
-  background: #0a1e14; border: 1px solid #2a5a38;
-  border-radius: 4px; padding: 4px 8px; margin-bottom: 6px;
-}
 </style>

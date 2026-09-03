@@ -137,7 +137,7 @@ import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
-import { labelPoints, getNextLabel, predictPatch } from '../../api/client.js'
+import { labelPoints, getNextLabel, predictInstances } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
 import ElevationFilter from './ElevationFilter.vue'
 
@@ -154,10 +154,10 @@ const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
-  { id: 'v1', label: 'XYZ',     desc: 'Coordinates only',                   title: 'Inference — XYZ only [I]' },
-  { id: 'v2', label: 'XYZ+C',   desc: 'XYZ + Classification',               title: 'Inference — XYZ + Classification' },
-  { id: 'v3', label: 'XYZ+I',   desc: 'XYZ + Intensity',                    title: 'Inference — XYZ + Intensity' },
-  { id: 'v4', label: 'XYZ+I+C', desc: 'XYZ + Intensity + Classification',   title: 'Inference — XYZ + Intensity + Classification' },
+  { id: 'finetune',     label: 'FT XYZ',   desc: 'Finetune — XYZ only',        title: 'Finetune — XYZ only [I]' },
+  { id: 'finetune_int', label: 'FT XYZ+I', desc: 'Finetune — XYZ + Intensity', title: 'Finetune — XYZ + Intensity' },
+  { id: 'scratch',      label: 'SC XYZ',   desc: 'Scratch — XYZ only',         title: 'Scratch — XYZ only' },
+  { id: 'scratch_int',  label: 'SC XYZ+I', desc: 'Scratch — XYZ + Intensity',  title: 'Scratch — XYZ + Intensity' },
 ]
 
 const inferenceOpen = ref(false)
@@ -343,31 +343,34 @@ function _paletteHex(labelValue) {
   return `#${hex(r)}${hex(g)}${hex(b)}`
 }
 
-const INFERENCE_NAMES = { 0: 'Non-tree', 101: 'Tree' }
+// Default params used by the toolbar "Run" button — user can fine-tune in InferenceLegend
+const DEFAULT_INST_PARAMS = { bandwidth: 2.0, min_points: 100, embed_weight: 0.3, max_spread: 5.0 }
 
-async function runPrediction(version = 'v1') {
+async function runPrediction(version = 'finetune') {
   if (store.predicting) return
   store.predicting = true
   store.inferenceVersion = version
-  store.segmentationPeaks = []   // clear previous peaks when re-running inference
+  store.segmentationPeaks = []
+  store.segmentationSeedPeaks = []
   try {
-    const res = await predictPatch(route.params.id, route.params.patchId, version)
-    const labels = res.data.labels
+    const res = await predictInstances(route.params.id, route.params.patchId, version, DEFAULT_INST_PARAMS)
+    const { labels } = res.data
     applyPredictionColors(labels)
-    store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
+    store.viewMode = 'prediction'   // must come AFTER applyPredictionColors
     store.hasPrediction = true
-    store.inferenceLabels = labels  // current display labels (may be overwritten by segmentation)
-    store.semanticLabels  = labels  // original 0/101 labels — never overwritten by segmentation
+    store.inferenceLabels = labels
+    // Synthesise 0/101 semantic labels so CHM tools (Advanced panel) still work
+    store.semanticLabels = labels.map(l => l >= 201 ? 101 : 0)
 
-    // Build legend: count occurrences of each label
+    // Build legend: 0 = Non-tree, 201+ = Tree #N
     const counts = {}
     for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
     store.predictionLegend = Object.entries(counts)
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([lbl, count]) => ({
-        label:  Number(lbl),
-        name:   INFERENCE_NAMES[lbl] ?? `Class ${lbl}`,
-        color:  _paletteHex(Number(lbl)),
+        label: Number(lbl),
+        name:  Number(lbl) === 0 ? 'Non-tree' : `Tree #${Number(lbl) - 200}`,
+        color: _paletteHex(Number(lbl)),
         count,
       }))
   } catch (err) {

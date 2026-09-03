@@ -91,7 +91,7 @@ function onKeyDown(e) {
       break
     case 'i':
     case 'I':
-      renderer3d.value?.runPrediction('v1')
+      renderer3d.value?.runPrediction('finetune')
       break
     case 'Enter':
     case ' ':
