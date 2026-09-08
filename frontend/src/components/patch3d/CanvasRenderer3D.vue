@@ -154,10 +154,8 @@ const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
-  { id: 'v1', label: 'XYZ',     desc: 'Coordinates only',                   title: 'Inference — XYZ only [I]' },
-  { id: 'v2', label: 'XYZ+C',   desc: 'XYZ + Classification',               title: 'Inference — XYZ + Classification' },
-  { id: 'v3', label: 'XYZ+I',   desc: 'XYZ + Intensity',                    title: 'Inference — XYZ + Intensity' },
-  { id: 'v4', label: 'XYZ+I+C', desc: 'XYZ + Intensity + Classification',   title: 'Inference — XYZ + Intensity + Classification' },
+  { id: 'finetune',     label: 'XYZ',   desc: 'Coordinates only',  title: 'Inference — XYZ only [I]' },
+  { id: 'finetune_int', label: 'XYZ+I', desc: 'XYZ + Intensity',   title: 'Inference — XYZ + Intensity' },
 ]
 
 const inferenceOpen = ref(false)
@@ -345,7 +343,7 @@ function _paletteHex(labelValue) {
 
 const INFERENCE_NAMES = { 0: 'Non-tree', 101: 'Tree' }
 
-async function runPrediction(version = 'v1') {
+async function runPrediction(version = 'finetune') {
   if (store.predicting) return
   store.predicting = true
   store.inferenceVersion = version

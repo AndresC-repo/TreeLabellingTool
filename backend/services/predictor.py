@@ -154,14 +154,16 @@ def _voxelize_metric(
     z: np.ndarray,
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
+    z_ground_ref: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Voxelize in metric units with HAG coordinate frame.
 
     Coordinate frame -- MUST match dataset.py __getitem__:
-      XY : centroid-subtracted
-      Z  : height above ground (HAG) = z - percentile(z, 5)
-           Ground is always ~0, trees always ~tree_height, regardless of
-           patch size, city altitude, or tree/ground ratio.
+      XY : centroid-subtracted (per tile)
+      Z  : height above ground (HAG) = z - z_ground_ref
+           z_ground_ref defaults to percentile(z, 5) of this tile, but should
+           be computed globally across the whole patch when tiling so all tiles
+           share the same Z reference frame.
 
     Returns
     -------
@@ -172,7 +174,8 @@ def _voxelize_metric(
     pts = np.stack([x, y, z], axis=1).astype(np.float32)
 
     xy_centroid = pts[:, :2].mean(axis=0)
-    z_ground    = np.percentile(pts[:, 2], 5).astype(np.float32)
+    z_ground    = np.float32(z_ground_ref if z_ground_ref is not None
+                             else np.percentile(pts[:, 2], 5))
 
     pts_c = pts.copy()
     pts_c[:, :2] -= xy_centroid  # XY centroid-relative
@@ -217,6 +220,7 @@ def _forward_chunk(
     z: np.ndarray,
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
+    z_ground_ref: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Voxelise one chunk and run a single model forward pass.
 
@@ -225,7 +229,8 @@ def _forward_chunk(
       offsets    : float32 (N, 3)
       embeddings : float32 (N, E)
     """
-    coords, feats, inv_map = _voxelize_metric(x, y, z, intensity, classification)
+    coords, feats, inv_map = _voxelize_metric(x, y, z, intensity, classification,
+                                               z_ground_ref=z_ground_ref)
 
     vox_xyz = coords[:, 1:]
     min_vox = vox_xyz.min(axis=0)
@@ -278,8 +283,12 @@ def _predict_with_tiling(
     y_starts = np.arange(ymin, ymax, _TILE_STEP_M)
     total    = len(x_starts) * len(y_starts)
 
+    # Compute z_ground globally so all tiles share the same HAG reference.
+    # Per-tile estimation fails for corner tiles with few ground points
+    # (e.g. large building footprint), shifting HAG and causing misclassification.
+    z_ground_global = float(np.percentile(z, 5))
     print(f"[predictor:{version}] {xmax-xmin:.0f}m x {ymax-ymin:.0f}m -- "
-          f"sliding window ({total} tiles) ...")
+          f"sliding window ({total} tiles), global z_ground={z_ground_global:.2f}m ...")
 
     done = 0
     for xs in x_starts:
@@ -297,7 +306,8 @@ def _predict_with_tiling(
             tile_cls = classification[idx] if classification is not None else None
 
             probs, offs, embs = _forward_chunk(
-                model, x[idx], y[idx], z[idx], tile_int, tile_cls
+                model, x[idx], y[idx], z[idx], tile_int, tile_cls,
+                z_ground_ref=z_ground_global,
             )
 
             if accum_embs is None:
