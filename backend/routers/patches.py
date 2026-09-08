@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse, UndoResponse
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse, UndoResponse, PredictRequest
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -258,14 +258,21 @@ def get_patch_colormap(session_id: str, patch_id: str):
     return {"entries": entries}
 
 
-@router.get("/{session_id}/{patch_id}/predict")
-def run_prediction(session_id: str, patch_id: str, version: str = "v1"):
+@router.post("/{session_id}/{patch_id}/predict")
+def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
     """Run NN inference on a patch and return per-point predicted class labels.
 
-    Query params:
-        version: 'v1' (XYZ) | 'v2' (XYZ+cls) | 'v3' (XYZ+int) | 'v4' (XYZ+int+cls)
+    Body (JSON):
+        version      : 'finetune' | 'finetune_int'
+        dtm_grid     : flat float array (dtm_rows * dtm_cols) from frontend class-2 ground points
+        dtm_rows/cols: grid dimensions
+        dtm_x/y_min  : world-space origin
+        dtm_x/y_range: world-space extent
     """
     from services.predictor import predict, VALID_VERSIONS, _MODEL_CONFIGS
+    if req is None:
+        req = PredictRequest()
+    version = req.version
     if version not in VALID_VERSIONS:
         raise HTTPException(400, f"version must be one of {VALID_VERSIONS}")
     patch_path = get_patch_path(session_id, patch_id)
@@ -282,6 +289,13 @@ def run_prediction(session_id: str, patch_id: str, version: str = "v1"):
             classification = np.array(las.classification,  dtype=np.float32) if cfg['use_classification'] else None,
             version=version,
             cache_key=f"{session_id}:{patch_id}:{version}",
+            dtm_grid=req.dtm_grid,
+            dtm_rows=req.dtm_rows,
+            dtm_cols=req.dtm_cols,
+            dtm_x_min=req.dtm_x_min,
+            dtm_y_min=req.dtm_y_min,
+            dtm_x_range=req.dtm_x_range,
+            dtm_y_range=req.dtm_y_range,
         )
     except Exception as e:
         raise HTTPException(500, f"Inference error: {e}")

@@ -49,8 +49,19 @@ export const getColormap = (sessionId, scalarField = 'classification') =>
 export const getPatchColormap = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/colormap`)
 
-export const predictPatch = (sessionId, patchId, version = 'v1') =>
-  api.get(`/patches/${sessionId}/${patchId}/predict`, { params: { version } })
+export const predictPatch = (sessionId, patchId, version = 'finetune', dtmGrid = null) => {
+  const payload = { version }
+  if (dtmGrid) {
+    payload.dtm_grid    = Array.from(dtmGrid.grid)
+    payload.dtm_rows    = dtmGrid.rows
+    payload.dtm_cols    = dtmGrid.cols
+    payload.dtm_x_min   = dtmGrid.xMin
+    payload.dtm_y_min   = dtmGrid.yMin
+    payload.dtm_x_range = dtmGrid.xRange
+    payload.dtm_y_range = dtmGrid.yRange
+  }
+  return api.post(`/patches/${sessionId}/${patchId}/predict`, payload)
+}
 
 export const applyLabelsBulk = (sessionId, patchId, labels) =>
   api.post(`/patches/${sessionId}/${patchId}/apply-labels-bulk`, { labels })

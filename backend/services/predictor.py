@@ -154,16 +154,17 @@ def _voxelize_metric(
     z: np.ndarray,
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
-    z_ground_ref: float | None = None,
+    terrain_z: np.ndarray | float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Voxelize in metric units with HAG coordinate frame.
 
     Coordinate frame -- MUST match dataset.py __getitem__:
       XY : centroid-subtracted (per tile)
-      Z  : height above ground (HAG) = z - z_ground_ref
-           z_ground_ref defaults to percentile(z, 5) of this tile, but should
-           be computed globally across the whole patch when tiling so all tiles
-           share the same Z reference frame.
+      Z  : height above ground (HAG) = z - terrain_z
+           terrain_z can be:
+             np.ndarray (N,)  -- per-point ground elevation from DTM (best)
+             float            -- global scalar fallback
+             None             -- compute from percentile(z, 5) of this tile
 
     Returns
     -------
@@ -174,12 +175,14 @@ def _voxelize_metric(
     pts = np.stack([x, y, z], axis=1).astype(np.float32)
 
     xy_centroid = pts[:, :2].mean(axis=0)
-    z_ground    = np.float32(z_ground_ref if z_ground_ref is not None
-                             else np.percentile(pts[:, 2], 5))
+    if terrain_z is None:
+        z_ground = np.float32(np.percentile(pts[:, 2], 5))
+    else:
+        z_ground = np.asarray(terrain_z, dtype=np.float32)  # scalar or (N,)
 
     pts_c = pts.copy()
     pts_c[:, :2] -= xy_centroid  # XY centroid-relative
-    pts_c[:, 2]  -= z_ground     # Z: HAG
+    pts_c[:, 2]  -= z_ground     # Z: HAG (per-point if DTM supplied, else global scalar)
 
     vox = np.round(pts_c / _VOXEL_SIZE).astype(np.int32)
     unique_vox, inv_map = np.unique(vox, axis=0, return_inverse=True)
@@ -220,7 +223,7 @@ def _forward_chunk(
     z: np.ndarray,
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
-    z_ground_ref: float | None = None,
+    terrain_z: np.ndarray | float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Voxelise one chunk and run a single model forward pass.
 
@@ -230,7 +233,7 @@ def _forward_chunk(
       embeddings : float32 (N, E)
     """
     coords, feats, inv_map = _voxelize_metric(x, y, z, intensity, classification,
-                                               z_ground_ref=z_ground_ref)
+                                               terrain_z=terrain_z)
 
     vox_xyz = coords[:, 1:]
     min_vox = vox_xyz.min(axis=0)
@@ -256,6 +259,27 @@ def _forward_chunk(
     return vox_probs[inv_map], vox_offs[inv_map], vox_embs[inv_map]
 
 
+def _compute_terrain_z(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    dtm_grid: list | None,
+    dtm_rows: int,
+    dtm_cols: int,
+    dtm_x_min: float,
+    dtm_y_min: float,
+    dtm_x_range: float,
+    dtm_y_range: float,
+) -> np.ndarray | None:
+    """Compute per-point ground elevation from DTM grid, or None if no DTM."""
+    if dtm_grid is None:
+        return None
+    dtm_arr = np.array(dtm_grid, dtype=np.float32).reshape(dtm_rows, dtm_cols)
+    cx = np.clip(((x - dtm_x_min) / dtm_x_range * dtm_cols).astype(np.int32), 0, dtm_cols - 1)
+    cy = np.clip(((y - dtm_y_min) / dtm_y_range * dtm_rows).astype(np.int32), 0, dtm_rows - 1)
+    return dtm_arr[cy, cx]
+
+
 def _predict_with_tiling(
     model: SegmentAnyTree,
     x: np.ndarray,
@@ -264,11 +288,13 @@ def _predict_with_tiling(
     intensity: np.ndarray | None,
     classification: np.ndarray | None,
     version: str,
+    terrain_z: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sliding-window inference over large point clouds.
 
     Tiles XY into overlapping _TILE_SIZE_M windows with _TILE_STEP_M step.
     Returns (probs, offsets, embeddings) averaged over all covering tiles.
+    terrain_z: per-point ground elevation from DTM (N,), or None for fallback.
     """
     n = len(x)
     accum_probs = np.zeros((n, 2), dtype=np.float64)
@@ -283,12 +309,15 @@ def _predict_with_tiling(
     y_starts = np.arange(ymin, ymax, _TILE_STEP_M)
     total    = len(x_starts) * len(y_starts)
 
-    # Compute z_ground globally so all tiles share the same HAG reference.
-    # Per-tile estimation fails for corner tiles with few ground points
-    # (e.g. large building footprint), shifting HAG and causing misclassification.
-    z_ground_global = float(np.percentile(z, 5))
-    print(f"[predictor:{version}] {xmax-xmin:.0f}m x {ymax-ymin:.0f}m -- "
-          f"sliding window ({total} tiles), global z_ground={z_ground_global:.2f}m ...")
+    # Z reference: use DTM per-point terrain if available, else global percentile.
+    # Per-tile percentile(z,5) is unreliable for corner tiles dominated by buildings.
+    if terrain_z is not None:
+        print(f"[predictor:{version}] {xmax-xmin:.0f}m x {ymax-ymin:.0f}m -- "
+              f"sliding window ({total} tiles), DTM per-point HAG ...")
+    else:
+        z_ground_global = float(np.percentile(z, 5))
+        print(f"[predictor:{version}] {xmax-xmin:.0f}m x {ymax-ymin:.0f}m -- "
+              f"sliding window ({total} tiles), global z_ground={z_ground_global:.2f}m ...")
 
     done = 0
     for xs in x_starts:
@@ -305,9 +334,10 @@ def _predict_with_tiling(
             tile_int = intensity[idx]      if intensity      is not None else None
             tile_cls = classification[idx] if classification is not None else None
 
+            tile_tz = terrain_z[idx] if terrain_z is not None else z_ground_global
             probs, offs, embs = _forward_chunk(
                 model, x[idx], y[idx], z[idx], tile_int, tile_cls,
-                z_ground_ref=z_ground_global,
+                terrain_z=tile_tz,
             )
 
             if accum_embs is None:
@@ -348,6 +378,13 @@ def predict(
     classification: np.ndarray | None = None,
     version: str = 'finetune',
     cache_key: str | None = None,
+    dtm_grid: list | None = None,
+    dtm_rows: int = 64,
+    dtm_cols: int = 64,
+    dtm_x_min: float = 0.0,
+    dtm_y_min: float = 0.0,
+    dtm_x_range: float = 1.0,
+    dtm_y_range: float = 1.0,
 ) -> np.ndarray:
     """Per-point semantic prediction.
 
@@ -381,14 +418,19 @@ def predict(
     extent_y = float(y32.max() - y32.min())
     print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m")
 
+    terrain_z = _compute_terrain_z(x32, y32, z32, dtm_grid, dtm_rows, dtm_cols,
+                                   dtm_x_min, dtm_y_min, dtm_x_range, dtm_y_range)
+
     if cache_key and cache_key in _NN_CACHE:
         print(f"[predictor:{version}] Using cached NN outputs for semantic ...")
         probs, _, _ = _NN_CACHE[cache_key]
     else:
         if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
-            probs, _offs, _embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+            probs, _offs, _embs = _forward_chunk(model, x32, y32, z32, int_, cls_,
+                                                  terrain_z=terrain_z)
         else:
-            probs, _offs, _embs = _predict_with_tiling(model, x32, y32, z32, int_, cls_, version)
+            probs, _offs, _embs = _predict_with_tiling(model, x32, y32, z32, int_, cls_, version,
+                                                        terrain_z=terrain_z)
         if cache_key:
             _NN_CACHE[cache_key] = (probs, _offs, _embs)
             print(f"[predictor:{version}] NN outputs cached (key={cache_key})")
@@ -463,6 +505,13 @@ def predict_instances(
     embed_weight: float = 0.3,
     max_spread: float = 5.0,
     cache_key: str | None = None,
+    dtm_grid: list | None = None,
+    dtm_rows: int = 64,
+    dtm_cols: int = 64,
+    dtm_x_min: float = 0.0,
+    dtm_y_min: float = 0.0,
+    dtm_x_range: float = 1.0,
+    dtm_y_range: float = 1.0,
 ) -> np.ndarray:
     """Per-point instance segmentation using all three model heads.
 
@@ -500,15 +549,19 @@ def predict_instances(
     extent_y = float(y32.max() - y32.min())
     print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m -- 3-head ...")
 
+    terrain_z = _compute_terrain_z(x32, y32, z32, dtm_grid, dtm_rows, dtm_cols,
+                                   dtm_x_min, dtm_y_min, dtm_x_range, dtm_y_range)
+
     if cache_key and cache_key in _NN_CACHE:
         print(f"[predictor:{version}] Cache hit — skipping NN forward pass ...")
         pt_probs, pt_offs, pt_embs = _NN_CACHE[cache_key]
     else:
         if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
-            pt_probs, pt_offs, pt_embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+            pt_probs, pt_offs, pt_embs = _forward_chunk(model, x32, y32, z32, int_, cls_,
+                                                         terrain_z=terrain_z)
         else:
             pt_probs, pt_offs, pt_embs = _predict_with_tiling(
-                model, x32, y32, z32, int_, cls_, version)
+                model, x32, y32, z32, int_, cls_, version, terrain_z=terrain_z)
         if cache_key:
             _NN_CACHE[cache_key] = (pt_probs, pt_offs, pt_embs)
             print(f"[predictor:{version}] NN outputs cached (key={cache_key})")

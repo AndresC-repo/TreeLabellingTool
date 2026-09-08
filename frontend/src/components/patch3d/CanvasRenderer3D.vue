@@ -349,7 +349,7 @@ async function runPrediction(version = 'finetune') {
   store.inferenceVersion = version
   store.segmentationPeaks = []   // clear previous peaks when re-running inference
   try {
-    const res = await predictPatch(route.params.id, route.params.patchId, version)
+    const res = await predictPatch(route.params.id, route.params.patchId, version, store.dtmGrid)
     const labels = res.data.labels
     applyPredictionColors(labels)
     store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
