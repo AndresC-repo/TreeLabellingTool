@@ -114,3 +114,6 @@ export const restoreFromClient = (sessionId, patchId, buffer) =>
     headers: { 'Content-Type': 'application/octet-stream' },
     transformRequest: [(data) => data],
   })
+
+export const deletePoints = (sessionId, patchId, pointIndices) =>
+  api.post(`/patches/${sessionId}/${patchId}/delete-points`, { point_indices: pointIndices })

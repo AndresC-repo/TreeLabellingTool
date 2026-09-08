@@ -240,7 +240,10 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   let cachedTerrainGrid = null    // result of _buildGroundTerrain — null when no class-2 points
   let inferenceCHMColors = null   // CHM colored only for tree-labeled (101) points
   let _zMin = 0, _zMax = 0       // Z bounds for filter
+  let _xMin = 0, _xMax = 0, _yMin = 0, _yMax = 0  // XY bounds
   let _filterLo = -Infinity, _filterHi = Infinity  // current filter bounds
+  let _clipBounds = null         // { xLo, xHi, yLo, yHi, zLo, zHi } | null
+  let _clipOutIndices = []       // indices outside clip bounds
   const viewMode = ref('elevation')
 
   async function load() {
@@ -272,14 +275,18 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       origAsprsClassifications = origClassifications
       setPatchCache(positions, origClassifications)
 
-      // Compute Z bounds from all points
+      // Compute XYZ bounds from all points
       _zMin = Infinity; _zMax = -Infinity
+      _xMin = Infinity; _xMax = -Infinity
+      _yMin = Infinity; _yMax = -Infinity
       for (let i = 0; i < count; i++) {
-        const z = positions[i*3+2]
-        if (z < _zMin) _zMin = z
-        if (z > _zMax) _zMax = z
+        const x = positions[i*3], y = positions[i*3+1], z = positions[i*3+2]
+        if (x < _xMin) _xMin = x; if (x > _xMax) _xMax = x
+        if (y < _yMin) _yMin = y; if (y > _yMax) _yMax = y
+        if (z < _zMin) _zMin = z; if (z > _zMax) _zMax = z
       }
       _filterLo = _zMin; _filterHi = _zMax
+      _clipBounds = null; _clipOutIndices = []  // reset clip on reload
       filteredElevationColors = null  // no filter yet
       predictionColors = null         // cleared on new load
 
@@ -302,7 +309,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
         if (Math.round(classifications[i]) === 2) groundIndices.push(i)
       }
 
-      return { center, positions, zMin: _zMin, zMax: _zMax, groundIndices }
+      return { center, positions, xMin: _xMin, xMax: _xMax, yMin: _yMin, yMax: _yMax, zMin: _zMin, zMax: _zMax, groundIndices }
     } finally { loading.value = false }
   }
 
@@ -361,8 +368,43 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     if (!pointsMesh) return
     const attr = pointsMesh.geometry.getAttribute('color')
     attr.array.set(src)
+    // Apply clip mask — dim out-of-bounds points in all view modes
+    if (_clipBounds && _clipOutIndices.length) {
+      const BG = [0.05, 0.05, 0.10]
+      for (const i of _clipOutIndices) {
+        attr.array[i*3] = BG[0]; attr.array[i*3+1] = BG[1]; attr.array[i*3+2] = BG[2]
+      }
+    }
     attr.needsUpdate = true
   }
+
+  function setClipFilter(xLo, xHi, yLo, yHi, zLo, zHi) {
+    if (!cachedPositions) return
+    const count = pointCount.value
+    const noClip = (xLo <= _xMin && xHi >= _xMax && yLo <= _yMin && yHi >= _yMax && zLo <= _zMin && zHi >= _zMax)
+    if (noClip) {
+      _clipBounds = null
+      _clipOutIndices = []
+    } else {
+      _clipBounds = { xLo, xHi, yLo, yHi, zLo, zHi }
+      _clipOutIndices = []
+      for (let i = 0; i < count; i++) {
+        const x = cachedPositions[i*3], y = cachedPositions[i*3+1], z = cachedPositions[i*3+2]
+        if (x < xLo || x > xHi || y < yLo || y > yHi || z < zLo || z > zHi) {
+          _clipOutIndices.push(i)
+        }
+      }
+    }
+    _applyToMesh(_activeColors())
+  }
+
+  function clearClipFilter() {
+    _clipBounds = null; _clipOutIndices = []
+    _applyToMesh(_activeColors())
+  }
+
+  function getClippedOutIndices() { return _clipOutIndices }
+  function getXYBounds() { return { xMin: _xMin, xMax: _xMax, yMin: _yMin, yMax: _yMax } }
 
   function setViewMode(mode) {
     viewMode.value = mode
@@ -483,5 +525,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
   function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, getPointsMesh, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getXYBounds, getPointsMesh, dispose }
 }

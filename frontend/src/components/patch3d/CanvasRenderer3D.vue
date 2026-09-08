@@ -137,7 +137,7 @@ import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
-import { labelPoints, getNextLabel, predictInstances } from '../../api/client.js'
+import { labelPoints, getNextLabel, predictPatch, deletePoints } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
 import ElevationFilter from './ElevationFilter.vue'
 
@@ -149,15 +149,15 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, getPointsMesh, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getPointsMesh, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
-  { id: 'finetune',     label: 'FT XYZ',   desc: 'Finetune — XYZ only',        title: 'Finetune — XYZ only [I]' },
-  { id: 'finetune_int', label: 'FT XYZ+I', desc: 'Finetune — XYZ + Intensity', title: 'Finetune — XYZ + Intensity' },
-  { id: 'scratch',      label: 'SC XYZ',   desc: 'Scratch — XYZ only',         title: 'Scratch — XYZ only' },
-  { id: 'scratch_int',  label: 'SC XYZ+I', desc: 'Scratch — XYZ + Intensity',  title: 'Scratch — XYZ + Intensity' },
+  { id: 'v1', label: 'XYZ',     desc: 'Coordinates only',                   title: 'Inference — XYZ only [I]' },
+  { id: 'v2', label: 'XYZ+C',   desc: 'XYZ + Classification',               title: 'Inference — XYZ + Classification' },
+  { id: 'v3', label: 'XYZ+I',   desc: 'XYZ + Intensity',                    title: 'Inference — XYZ + Intensity' },
+  { id: 'v4', label: 'XYZ+I+C', desc: 'XYZ + Intensity + Classification',   title: 'Inference — XYZ + Intensity + Classification' },
 ]
 
 const inferenceOpen = ref(false)
@@ -343,34 +343,31 @@ function _paletteHex(labelValue) {
   return `#${hex(r)}${hex(g)}${hex(b)}`
 }
 
-// Default params used by the toolbar "Run" button — user can fine-tune in InferenceLegend
-const DEFAULT_INST_PARAMS = { bandwidth: 2.0, min_points: 100, embed_weight: 0.3, max_spread: 5.0 }
+const INFERENCE_NAMES = { 0: 'Non-tree', 101: 'Tree' }
 
-async function runPrediction(version = 'finetune') {
+async function runPrediction(version = 'v1') {
   if (store.predicting) return
   store.predicting = true
   store.inferenceVersion = version
-  store.segmentationPeaks = []
-  store.segmentationSeedPeaks = []
+  store.segmentationPeaks = []   // clear previous peaks when re-running inference
   try {
-    const res = await predictInstances(route.params.id, route.params.patchId, version, DEFAULT_INST_PARAMS)
-    const { labels } = res.data
+    const res = await predictPatch(route.params.id, route.params.patchId, version)
+    const labels = res.data.labels
     applyPredictionColors(labels)
-    store.viewMode = 'prediction'   // must come AFTER applyPredictionColors
+    store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
     store.hasPrediction = true
-    store.inferenceLabels = labels
-    // Synthesise 0/101 semantic labels so CHM tools (Advanced panel) still work
-    store.semanticLabels = labels.map(l => l >= 201 ? 101 : 0)
+    store.inferenceLabels = labels  // current display labels (may be overwritten by segmentation)
+    store.semanticLabels  = labels  // original 0/101 labels — never overwritten by segmentation
 
-    // Build legend: 0 = Non-tree, 201+ = Tree #N
+    // Build legend: count occurrences of each label
     const counts = {}
     for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
     store.predictionLegend = Object.entries(counts)
       .sort(([a], [b]) => Number(a) - Number(b))
       .map(([lbl, count]) => ({
-        label: Number(lbl),
-        name:  Number(lbl) === 0 ? 'Non-tree' : `Tree #${Number(lbl) - 200}`,
-        color: _paletteHex(Number(lbl)),
+        label:  Number(lbl),
+        name:   INFERENCE_NAMES[lbl] ?? `Class ${lbl}`,
+        color:  _paletteHex(Number(lbl)),
         count,
       }))
   } catch (err) {
@@ -466,6 +463,18 @@ watch(() => [store.elevFilterMin, store.elevFilterMax], ([lo, hi]) => {
   setElevationFilter(lo, hi)
 })
 
+// React to clip filter changes
+watch(
+  () => [store.clipActive, store.xClipMin, store.xClipMax, store.yClipMin, store.yClipMax, store.zClipMin, store.zClipMax],
+  ([active, xLo, xHi, yLo, yHi, zLo, zHi]) => {
+    if (active) {
+      setClipFilter(xLo, xHi, yLo, yHi, zLo, zHi)
+    } else {
+      clearClipFilter()
+    }
+  }
+)
+
 // ── Segmentation peaks — red dot markers ─────────────────────────────────────
 
 function _buildPointsMesh(positions, color, size) {
@@ -513,6 +522,12 @@ onMounted(async () => {
     store.zBoundsMax = result.zMax ?? 0
     store.elevFilterMin = result.zMin ?? 0
     store.elevFilterMax = result.zMax ?? 0
+    store.xBoundsMin = result.xMin ?? 0; store.xBoundsMax = result.xMax ?? 0
+    store.yBoundsMin = result.yMin ?? 0; store.yBoundsMax = result.yMax ?? 0
+    store.xClipMin = result.xMin ?? 0;  store.xClipMax = result.xMax ?? 0
+    store.yClipMin = result.yMin ?? 0;  store.yClipMax = result.yMax ?? 0
+    store.zClipMin = result.zMin ?? 0;  store.zClipMax = result.zMax ?? 0
+    store.clipActive = false
   }
   // Store DTM grid for use in inference segmentation
   store.dtmGrid = getDTMGrid()
@@ -618,7 +633,38 @@ function onHoverMove(e) {
   hoverInfo.value = { x: e.clientX - cRect.left + 14, y: e.clientY - cRect.top + 14, text: name }
 }
 
-defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction })
+async function deleteClippedPoints() {
+  const indices = getClippedOutIndices()
+  if (!indices.length) return { deleted: 0 }
+  const res = await deletePoints(route.params.id, route.params.patchId, Array.from(indices))
+  // Reload the point cloud from the (now smaller) LAS file
+  await reloadPatch()
+  return res.data
+}
+
+async function reloadPatch() {
+  // Clear inference state (indices have changed)
+  store.hasPrediction = false
+  store.inferenceLabels = null
+  store.semanticLabels = null
+  store.predictionLegend = []
+  store.clipActive = false
+  const result = await load()
+  store.pointCount = pointCount.value
+  if (result) {
+    store.groundIndices = result.groundIndices ?? []
+    store.zBoundsMin = result.zMin ?? 0; store.zBoundsMax = result.zMax ?? 0
+    store.elevFilterMin = result.zMin ?? 0; store.elevFilterMax = result.zMax ?? 0
+    store.xBoundsMin = result.xMin ?? 0; store.xBoundsMax = result.xMax ?? 0
+    store.yBoundsMin = result.yMin ?? 0; store.yBoundsMax = result.yMax ?? 0
+    store.xClipMin = result.xMin ?? 0; store.xClipMax = result.xMax ?? 0
+    store.yClipMin = result.yMin ?? 0; store.yClipMax = result.yMax ?? 0
+    store.zClipMin = result.zMin ?? 0; store.zClipMax = result.zMax ?? 0
+  }
+  store.dtmGrid = getDTMGrid()
+}
+
+defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction, deleteClippedPoints, getClippedOutIndices })
 </script>
 
 <style scoped>

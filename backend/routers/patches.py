@@ -4,6 +4,7 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, FileResponse
+from pydantic import BaseModel
 from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, AutoTuneRequest, AutoTuneResponse, MarkTrainingRequest, MarkTrainingResponse, RelabelSelectionRequest, RelabelSelectionResponse, UndoResponse
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
@@ -280,6 +281,7 @@ def run_prediction(session_id: str, patch_id: str, version: str = "v1"):
             intensity      = np.array(las.intensity,       dtype=np.float32) if cfg['use_intensity']      else None,
             classification = np.array(las.classification,  dtype=np.float32) if cfg['use_classification'] else None,
             version=version,
+            cache_key=f"{session_id}:{patch_id}:{version}",
         )
     except Exception as e:
         raise HTTPException(500, f"Inference error: {e}")
@@ -321,6 +323,7 @@ def run_prediction_instances(
             min_points=min_points,
             embed_weight=embed_weight,
             max_spread=max_spread,
+            cache_key=f"{session_id}:{patch_id}:{version}",
         )
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -500,3 +503,80 @@ async def restore_patch_from_client(session_id: str, patch_id: str, request: Req
     new_las.write(str(patch_path))
 
     return {"ok": True, "point_count": int(len(x))}
+
+
+class DeletePointsRequest(BaseModel):
+    point_indices: list[int]  # indices to DELETE (not keep)
+
+
+@router.post("/{session_id}/{patch_id}/delete-points")
+def delete_patch_points(session_id: str, patch_id: str, req: DeletePointsRequest):
+    """Permanently delete points by index from the patch LAS file.
+
+    The label manager is re-initialised with the surviving points so that
+    subsequent label / save operations work correctly.  The NN inference
+    cache for this patch is also cleared because point indices have changed.
+    """
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+
+    labels = lm.get_labels(patch_id)
+    if labels is None:
+        raise HTTPException(404, "Patch label state not found — was the patch extracted?")
+
+    las = laspy.read(str(patch_path))
+    n = len(las.x)
+
+    if not req.point_indices:
+        raise HTTPException(400, "point_indices must not be empty")
+
+    delete_set = set(req.point_indices)
+    if any(i < 0 or i >= n for i in delete_set):
+        raise HTTPException(400, f"Some indices are out of range [0, {n})")
+    if len(delete_set) >= n:
+        raise HTTPException(400, "Cannot delete all points from a patch")
+
+    keep = np.ones(n, dtype=bool)
+    for i in delete_set:
+        keep[i] = False
+
+    # Build new LAS preserving all standard and extra dimensions
+    new_header = laspy.LasHeader(point_format=las.header.point_format, version=las.header.version)
+    new_las = laspy.LasData(header=new_header)
+    new_las.x = las.x[keep]
+    new_las.y = las.y[keep]
+    new_las.z = las.z[keep]
+    new_las.classification = las.classification[keep]
+
+    # Copy intensity if present
+    try:
+        new_las.intensity = las.intensity[keep]
+    except Exception:
+        pass
+
+    # Copy extra dimensions (e.g. 'label' field written by save_labeled_patch)
+    for dim_name in las.point_format.extra_dimension_names:
+        try:
+            setattr(new_las, dim_name, getattr(las, dim_name)[keep])
+        except Exception:
+            pass
+
+    new_las.write(str(patch_path))
+
+    # Re-initialise label manager with surviving point labels
+    new_labels = labels[keep]
+    orig_cls = np.array(new_las.classification, dtype=np.int32)
+    lm.init_patch(patch_id, orig_cls, current_labels=new_labels)
+
+    # Invalidate NN cache entries for this patch (indices have changed)
+    try:
+        from services.predictor import _NN_CACHE
+        stale = [k for k in list(_NN_CACHE) if f":{patch_id}:" in k]
+        for k in stale:
+            _NN_CACHE.pop(k, None)
+    except Exception:
+        pass
+
+    remaining = int(keep.sum())
+    return {"ok": True, "deleted": len(delete_set), "remaining": remaining}

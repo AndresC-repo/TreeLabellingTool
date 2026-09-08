@@ -25,7 +25,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const segmenting        = ref(false)
   const isWholePatch      = ref(false)
   const hasPrediction     = ref(false)
-  const inferenceVersion  = ref('finetune')   // 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
+  const inferenceVersion  = ref('v1')   // 'v1' | 'v2'
   // [{ label: number, name: string, color: string, count: number }]
   const predictionLegend = ref([])
   // Raw per-point label array from last inference (Int32Array or plain array)
@@ -53,6 +53,20 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const elevFilterMin = ref(0)
   const elevFilterMax = ref(0)
 
+  // XY bounds — set on load, used by ClipPanel
+  const xBoundsMin = ref(0)
+  const xBoundsMax = ref(0)
+  const yBoundsMin = ref(0)
+  const yBoundsMax = ref(0)
+  // Clip filter — ClipPanel writes these, CanvasRenderer3D watches and calls setClipFilter
+  const xClipMin = ref(0)
+  const xClipMax = ref(0)
+  const yClipMin = ref(0)
+  const yClipMax = ref(0)
+  const zClipMin = ref(0)
+  const zClipMax = ref(0)
+  const clipActive = ref(false)
+
   function addAppliedLabel(labelValue) {
     if (labelValue !== 0 && !appliedLabels.value.includes(labelValue)) {
       appliedLabels.value = [...appliedLabels.value, labelValue].sort((a, b) => a - b)
@@ -74,7 +88,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     segmenting.value = false
     isWholePatch.value = false
     hasPrediction.value = false
-    inferenceVersion.value = 'finetune'
+    inferenceVersion.value = 'v1'
     predictionLegend.value  = []
     inferenceLabels.value   = null
     semanticLabels.value    = null
@@ -87,6 +101,12 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     zBoundsMax.value = 0
     elevFilterMin.value = 0
     elevFilterMax.value = 0
+    xBoundsMin.value = 0; xBoundsMax.value = 0
+    yBoundsMin.value = 0; yBoundsMax.value = 0
+    xClipMin.value = 0; xClipMax.value = 0
+    yClipMin.value = 0; yClipMax.value = 0
+    zClipMin.value = 0; zClipMax.value = 0
+    clipActive.value = false
   }
 
   return {
@@ -97,6 +117,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     inferenceLabels, semanticLabels, inferenceVersion,
     segmentationPeaks, segmentationSeedPeaks,
     undoResult, groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
+    xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive,
     addAppliedLabel, reset,
   }
 })

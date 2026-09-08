@@ -1,10 +1,10 @@
 """
 Inference service for SegmentAnyTree models.
 
-v1 -- XYZ                       in_channels=3  best_model.pth
-v2 -- XYZ + classification      in_channels=5  best_model_cls.pth
-v3 -- XYZ + intensity           in_channels=4  best_model_int.pth
-v4 -- XYZ + intensity + class   in_channels=6  best_model_int_cls.pth
+finetune     -- XYZ             in_channels=3  best_model.pth           (finetuned)
+finetune_int -- XYZ + Intensity in_channels=4  best_model_int.pth       (finetuned)
+scratch      -- XYZ             in_channels=3  best_model_scratch.pth   (trained from scratch)
+scratch_int  -- XYZ + Intensity in_channels=4  best_model_scratch_int.pth (trained from scratch)
 """
 from __future__ import annotations
 import numpy as np
@@ -15,7 +15,7 @@ from huggingface_hub import hf_hub_download
 from services.segment_any_tree import SegmentAnyTree
 
 _MODEL_REPO = "AndCarr/UrbanTreeDetector"
-_VOXEL_SIZE = 0.05  # metres -- must match training (finetune_config.yaml: voxel_size: 0.05)
+_VOXEL_SIZE = 0.08  # metres -- must match training (finetune_config.yaml: voxel_size: 0.08)
 
 # Sliding-window inference constants
 # The model was trained on small patches (~20-30 m diameter).
@@ -27,37 +27,42 @@ _TILE_STEP_M  =  60.0   # step between tiles (50 % overlap)
 _MIN_TILE_PTS =  20     # skip tiles with fewer points than this
 
 _MODEL_CONFIGS: dict[str, dict] = {
-    'v1': {
+    'finetune': {
         'filename':           'best_model.pth',
         'in_channels':        3,
         'use_intensity':      False,
         'use_classification': False,
-        'label':              'XYZ',
+        'label':              'Finetune — XYZ',
     },
-    'v2': {
-        'filename':           'best_model_cls.pth',
-        'in_channels':        5,
-        'use_intensity':      False,
-        'use_classification': True,
-        'label':              'XYZ + Classification',
-    },
-    'v3': {
+    'finetune_int': {
         'filename':           'best_model_int.pth',
         'in_channels':        4,
         'use_intensity':      True,
         'use_classification': False,
-        'label':              'XYZ + Intensity',
+        'label':              'Finetune — XYZ + Intensity',
     },
-    'v4': {
-        'filename':           'best_model_int_cls.pth',
-        'in_channels':        6,
+    'scratch': {
+        'filename':           'best_model_scratch.pth',
+        'in_channels':        3,
+        'use_intensity':      False,
+        'use_classification': False,
+        'label':              'Scratch — XYZ',
+    },
+    'scratch_int': {
+        'filename':           'best_model_scratch_int.pth',
+        'in_channels':        4,
         'use_intensity':      True,
-        'use_classification': True,
-        'label':              'XYZ + Intensity + Classification',
+        'use_classification': False,
+        'label':              'Scratch — XYZ + Intensity',
     },
 }
 
 _loaded: dict[str, SegmentAnyTree] = {}
+
+# NN output cache: key = "session_id:patch_id:version"
+# Stores (pt_probs, pt_offs, pt_embs) so Run Instance Segmentation
+# can re-use the forward pass from Run Inference without hitting the NN again.
+_NN_CACHE: dict[str, tuple] = {}
 VALID_VERSIONS = tuple(_MODEL_CONFIGS.keys())
 
 
@@ -331,7 +336,8 @@ def predict(
     z: np.ndarray,
     intensity: np.ndarray | None = None,
     classification: np.ndarray | None = None,
-    version: str = 'v1',
+    version: str = 'finetune',
+    cache_key: str | None = None,
 ) -> np.ndarray:
     """Per-point semantic prediction.
 
@@ -339,7 +345,7 @@ def predict(
         x, y, z        : float32 (N,) world coordinates
         intensity      : float32 (N,) raw intensity  (required for v3, v4)
         classification : float32 (N,) ASPRS class    (required for v2, v4)
-        version        : 'v1' | 'v2' | 'v3' | 'v4'
+        version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
 
     Returns:
         labels : int32 (N,) -- 0=non-tree, 101=tree
@@ -365,12 +371,20 @@ def predict(
     extent_y = float(y32.max() - y32.min())
     print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m")
 
-    if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
-        probs, _, _ = _forward_chunk(model, x32, y32, z32, int_, cls_)
+    if cache_key and cache_key in _NN_CACHE:
+        print(f"[predictor:{version}] Using cached NN outputs for semantic ...")
+        probs, _, _ = _NN_CACHE[cache_key]
     else:
-        probs, _, _ = _predict_with_tiling(model, x32, y32, z32, int_, cls_, version)
+        if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
+            probs, _offs, _embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+        else:
+            probs, _offs, _embs = _predict_with_tiling(model, x32, y32, z32, int_, cls_, version)
+        if cache_key:
+            _NN_CACHE[cache_key] = (probs, _offs, _embs)
+            print(f"[predictor:{version}] NN outputs cached (key={cache_key})")
 
-    point_labels = probs.argmax(axis=1).astype(np.int32)
+    _TREE_THRESHOLD = 0.4   # lower = more recall; default argmax was effectively 0.5
+    point_labels = (probs[:, 1] >= _TREE_THRESHOLD).astype(np.int32)
     point_labels[point_labels == 1] = 101  # 1=tree -> 101
 
     print(f"[predictor:{version}] Done. "
@@ -433,11 +447,12 @@ def predict_instances(
     z: np.ndarray,
     intensity: np.ndarray | None = None,
     classification: np.ndarray | None = None,
-    version: str = 'v1',
+    version: str = 'finetune',
     bandwidth: float = 2.0,
     min_points: int = 100,
     embed_weight: float = 0.3,
     max_spread: float = 5.0,
+    cache_key: str | None = None,
 ) -> np.ndarray:
     """Per-point instance segmentation using all three model heads.
 
@@ -445,7 +460,7 @@ def predict_instances(
         x, y, z        : float32 (N,) world coordinates
         intensity      : float32 (N,) raw intensity (required for v3, v4)
         classification : float32 (N,) ASPRS class  (required for v2, v4)
-        version        : 'v1' | 'v2' | 'v3' | 'v4'
+        version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
         bandwidth      : mean-shift bandwidth in metres
         min_points     : minimum cluster size to be kept as a tree
         embed_weight   : embedding vs XY weighting for clustering
@@ -475,13 +490,21 @@ def predict_instances(
     extent_y = float(y32.max() - y32.min())
     print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m -- 3-head ...")
 
-    if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
-        pt_probs, pt_offs, pt_embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+    if cache_key and cache_key in _NN_CACHE:
+        print(f"[predictor:{version}] Cache hit — skipping NN forward pass ...")
+        pt_probs, pt_offs, pt_embs = _NN_CACHE[cache_key]
     else:
-        pt_probs, pt_offs, pt_embs = _predict_with_tiling(
-            model, x32, y32, z32, int_, cls_, version)
+        if extent_x <= _MAX_DIRECT_M and extent_y <= _MAX_DIRECT_M:
+            pt_probs, pt_offs, pt_embs = _forward_chunk(model, x32, y32, z32, int_, cls_)
+        else:
+            pt_probs, pt_offs, pt_embs = _predict_with_tiling(
+                model, x32, y32, z32, int_, cls_, version)
+        if cache_key:
+            _NN_CACHE[cache_key] = (pt_probs, pt_offs, pt_embs)
+            print(f"[predictor:{version}] NN outputs cached (key={cache_key})")
 
-    tree_mask = pt_probs.argmax(axis=1) == 1
+    _TREE_THRESHOLD = 0.4
+    tree_mask = pt_probs[:, 1] >= _TREE_THRESHOLD
     n_tree    = int(tree_mask.sum())
     print(f"[predictor:{version}] {n_tree:,}/{len(x):,} tree pts -- clustering ...")
 

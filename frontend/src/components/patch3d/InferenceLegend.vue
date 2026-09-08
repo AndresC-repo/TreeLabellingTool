@@ -13,29 +13,7 @@
     <!-- Result message -->
     <p v-if="instMessage" class="info-msg">{{ instMessage }}</p>
 
-    <!-- Parameters toggle -->
-    <div class="section-header" @click="instParamsOpen = !instParamsOpen">
-      <span>⚙ Parameters</span>
-      <span class="chevron">{{ instParamsOpen ? '▲' : '▼' }}</span>
-    </div>
-    <div v-if="instParamsOpen" class="params-grid">
-      <label class="param-row">
-        <span class="param-name" title="Mean-shift bandwidth in metres — controls how far apart two tree centres can be and still merge into one cluster. Roughly equal to the maximum expected crown radius.">Bandwidth (m)</span>
-        <input v-model.number="instParams.bandwidth" type="number" min="0.5" max="20" step="0.5" class="param-input" />
-      </label>
-      <label class="param-row">
-        <span class="param-name" title="Clusters with fewer points than this are discarded as noise.">Min pts / tree</span>
-        <input v-model.number="instParams.min_points" type="number" min="1" step="50" class="param-input" />
-      </label>
-      <label class="param-row">
-        <span class="param-name" title="How much the 5-D embedding features contribute relative to shifted XY position. Higher = more embedding influence.">Embed weight</span>
-        <input v-model.number="instParams.embed_weight" type="number" min="0" max="2" step="0.05" class="param-input" />
-      </label>
-      <label class="param-row">
-        <span class="param-name" title="DBSCAN eps for spatial coherence check (metres). Points further than this from the main cluster blob are demoted to background.">Max spread (m)</span>
-        <input v-model.number="instParams.max_spread" type="number" min="1" max="30" step="1" class="param-input" />
-      </label>
-    </div>
+
 
     <!-- Lasso edit — shown when a lasso selection is active -->
     <div v-if="store.selectedIndices.length > 0 && store.inferenceLabels" class="inf-edit-section">
@@ -52,12 +30,57 @@
       <button class="inf-edit-clear" @click="store.selectedIndices = []">Clear selection</button>
     </div>
 
+    <!-- Step 1: semantic (tree / non-tree) -->
+    <button
+      class="semantic-btn"
+      :disabled="semanticRunning || instRunning || store.segmenting"
+      @click="runSemantic"
+      title="Classify every point as tree or non-tree — no instance splitting"
+    >
+      {{ semanticRunning ? 'Running…' : 'Run Inference (tree / non-tree)' }}
+    </button>
+
+    <!-- Reset instances back to plain semantic coloring -->
+    <button
+      v-if="store.semanticLabels && store.hasPrediction"
+      class="reset-semantic-btn"
+      :disabled="instRunning || semanticRunning || applying"
+      @click="resetToSemantic"
+      title="Remove instance colours and go back to tree / non-tree view"
+    >
+      ↩ Back to Semantic View
+    </button>
+
+    <!-- Instance Segmentation Parameters — shown just above Run Instance Segmentation -->
+    <div class="section-header" @click="instParamsOpen = !instParamsOpen">
+      <span>⚙ Instance Segmentation Parameters</span>
+      <span class="chevron">{{ instParamsOpen ? '▲' : '▼' }}</span>
+    </div>
+    <div v-if="instParamsOpen" class="params-grid">
+      <label class="param-row">
+        <span class="param-name" title="Mean-shift radius in metres. Roughly equal to the expected crown radius of the trees. Larger = fewer, bigger clusters.">Bandwidth (m)</span>
+        <input v-model.number="instParams.bandwidth" type="number" min="0.5" max="20" step="0.5" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="Clusters with fewer points than this are discarded as noise.">Min pts / tree</span>
+        <input v-model.number="instParams.min_points" type="number" min="1" step="50" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="How much the NN embedding features contribute relative to XY position. 0 = position only, 1+ = more NN influence.">Embed weight</span>
+        <input v-model.number="instParams.embed_weight" type="number" min="0" max="2" step="0.05" class="param-input" />
+      </label>
+      <label class="param-row">
+        <span class="param-name" title="Maximum distance (metres) a point can be from its cluster centre. Increase for large-crowned trees.">Max spread (m)</span>
+        <input v-model.number="instParams.max_spread" type="number" min="1" max="30" step="1" class="param-input" />
+      </label>
+    </div>
+
     <!-- Primary action -->
     <button
       class="inst-btn"
-      :disabled="instRunning || store.segmenting || applying"
+      :disabled="!store.semanticLabels || instRunning || store.segmenting || applying"
       @click="runInstanceSegmentation"
-      title="Run 3-head model (offset + embedding + semantic) for best instance segmentation"
+      title="Split detected trees into individual instances (run inference first)"
     >
       {{ instRunning ? 'Running…' : 'Run Instance Segmentation' }}
     </button>
@@ -243,7 +266,7 @@
 import { ref, computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
-import { applyLabelsBulk, segmentTrees, getTreeMetrics, autoTuneSegmentation, markTrainingExample, predictInstances } from '../../api/client.js'
+import { applyLabelsBulk, segmentTrees, getTreeMetrics, autoTuneSegmentation, markTrainingExample, predictInstances, predictPatch } from '../../api/client.js'
 
 const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-applied'])
 
@@ -254,6 +277,7 @@ const VERSION_LABELS = { finetune: 'Finetune — XYZ', finetune_int: 'Finetune �
 const versionLabel = computed(() => VERSION_LABELS[store.inferenceVersion] ?? '')
 
 const applying        = ref(false)
+const semanticRunning = ref(false)
 const applied         = ref(false)
 const instRunning     = ref(false)
 const instMessage     = ref('')
@@ -273,10 +297,10 @@ const inferenceEditLabel = ref(0)
 
 // Instance segmentation params (3-head)
 const instParams = reactive({
-  bandwidth:    2.0,
-  min_points:   100,
+  bandwidth:    8.0,
+  min_points:   450,
   embed_weight: 0.3,
-  max_spread:   5.0,
+  max_spread:  20.0,
 })
 
 // CHM segmentation hyperparameters
@@ -333,6 +357,35 @@ function applyInferenceLabel(targetLabel) {
 
   store.selectedIndices = []
   emit('inference-edited', newLabels)
+}
+
+async function runSemantic() {
+  if (semanticRunning.value) return
+  semanticRunning.value = true
+  try {
+    const res = await predictPatch(
+      route.params.id,
+      route.params.patchId,
+      store.inferenceVersion,
+    )
+    const labels = new Int32Array(res.data.labels)
+    store.inferenceLabels  = labels
+    store.semanticLabels   = labels
+    store.hasPrediction    = true
+    store.viewMode         = 'prediction'
+    emit('segment-done', labels)
+  } catch (err) {
+    console.error('Semantic inference failed:', err)
+  } finally {
+    semanticRunning.value = false
+  }
+}
+
+function resetToSemantic() {
+  if (!store.semanticLabels) return
+  store.inferenceLabels = store.semanticLabels
+  store.viewMode        = 'prediction'
+  emit('segment-done', store.semanticLabels)
 }
 
 async function runInstanceSegmentation() {
@@ -592,6 +645,24 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .param-input:focus { outline: none; border-color: #6a9adf; }
 
 /* ── Primary action button ────────────────────────────────────── */
+.semantic-btn {
+  width: 100%; padding: 10px;
+  background: #1e4a2e; border: 1px solid #3a7a4e;
+  border-radius: 6px; color: #8de8a8; cursor: pointer; font-size: 14px;
+  margin-bottom: 6px;
+}
+.semantic-btn:hover:not(:disabled) { background: #2a6a3e; }
+.semantic-btn:disabled { opacity: 0.4; cursor: default; }
+
+.reset-semantic-btn {
+  width: 100%; padding: 7px;
+  background: #1e2e1e; border: 1px solid #3a5a3a;
+  border-radius: 6px; color: #6ab87a; cursor: pointer; font-size: 12px;
+  margin-bottom: 6px;
+}
+.reset-semantic-btn:hover:not(:disabled) { background: #253525; }
+.reset-semantic-btn:disabled { opacity: 0.4; cursor: default; }
+
 .inst-btn {
   width: 100%; padding: 9px; margin-top: 4px;
   background: #1a3a5e; border: 1px solid #3a6aae;

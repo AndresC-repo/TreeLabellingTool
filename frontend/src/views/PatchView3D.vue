@@ -16,6 +16,12 @@
           @inference-edited="onSegmentDone"
           @labels-bulk-applied="onLabelsBulkApplied"
         />
+        <ClipPanel
+          :clipped-count="clippedCount"
+          :deleting="clipDeleting"
+          @clip-change="onClipChange"
+          @delete-clipped="onDeleteClipped"
+        />
         <SavePanel ref="savePanel" />
       </aside>
     </div>
@@ -31,12 +37,33 @@ import LabelPanel from '../components/patch3d/LabelPanel.vue'
 import PatchLegend from '../components/patch3d/PatchLegend.vue'
 import InferenceLegend from '../components/patch3d/InferenceLegend.vue'
 import SavePanel from '../components/patch3d/SavePanel.vue'
+import ClipPanel from '../components/patch3d/ClipPanel.vue'
 
 const route = useRoute()
 const store = usePatch3DStore()
 const renderer3d = ref(null)
 const labelPanel = ref(null)
 const savePanel = ref(null)
+const clippedCount = ref(0)
+const clipDeleting = ref(false)
+
+function onClipChange() {
+  clippedCount.value = renderer3d.value?.getClippedOutIndices()?.length ?? 0
+}
+
+async function onDeleteClipped() {
+  if (clipDeleting.value) return
+  clipDeleting.value = true
+  try {
+    const res = await renderer3d.value?.deleteClippedPoints()
+    clippedCount.value = 0
+    store.pointCount = store.pointCount - (res?.deleted ?? 0)
+  } catch (err) {
+    console.error('Delete clipped points failed:', err)
+  } finally {
+    clipDeleting.value = false
+  }
+}
 
 function onLabelsBulkApplied(labels) {
   renderer3d.value?.applyLabelsBulkColors(Array.from(labels))
@@ -91,7 +118,7 @@ function onKeyDown(e) {
       break
     case 'i':
     case 'I':
-      renderer3d.value?.runPrediction('finetune')
+      renderer3d.value?.runPrediction('v1')
       break
     case 'Enter':
     case ' ':
