@@ -7,6 +7,9 @@
       </button>
       <input ref="fileInput" type="file" accept=".las,.LAS,.laz,.LAZ" multiple style="display:none" @change="onFilesSelected" />
 
+      <!-- Split button -->
+      <button class="split-btn" @click="splitModal = true" title="Split a large LAS/LAZ into tiles and download as ZIP">✂ Split</button>
+
       <!-- File dropdown -->
       <div class="file-dropdown" @click.stop>
         <button class="file-trigger" @click="dropdownOpen = !dropdownOpen" :title="currentFilename">
@@ -61,6 +64,36 @@
       </aside>
     </div>
   </div>
+
+  <!-- Split modal -->
+  <teleport to="body">
+    <div v-if="splitModal" class="split-overlay" @click.self="splitModal = false">
+      <div class="split-box">
+        <h3>Split LAS / LAZ into tiles</h3>
+        <div class="split-row">
+          <label>File</label>
+          <input type="file" accept=".las,.LAS,.laz,.LAZ" @change="onSplitFileSelected" />
+        </div>
+        <div class="split-row">
+          <label>Tiles</label>
+          <select v-model="splitNTiles">
+            <option :value="4">4 tiles  (2 × 2)</option>
+            <option :value="8">8 tiles  (2 × 4)</option>
+            <option :value="16">16 tiles (4 × 4)</option>
+            <option :value="32">32 tiles (4 × 8)</option>
+          </select>
+        </div>
+        <p v-if="splitSelectedFile" class="split-filename">{{ splitSelectedFile.name }}</p>
+        <p v-if="splitProgress" class="split-progress">Uploading… {{ splitProgress }}%</p>
+        <div class="split-actions">
+          <button @click="splitModal = false">Cancel</button>
+          <button class="split-go" :disabled="!splitSelectedFile || splitting" @click="doSplit">
+            {{ splitting ? 'Processing…' : 'Split & Download' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </template>
 
 <script setup>
@@ -68,7 +101,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
-import { uploadFile, extractPatch } from '../api/client.js'
+import { uploadFile, extractPatch, splitFile } from '../api/client.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
 import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
@@ -163,6 +196,42 @@ async function loadWholePatch() {
     extractingWhole.value = false
   }
 }
+
+// --- Split feature ---
+const splitModal = ref(false)
+const splitNTiles = ref(4)
+const splitSelectedFile = ref(null)
+const splitting = ref(false)
+const splitProgress = ref(0)
+
+function onSplitFileSelected(e) {
+  splitSelectedFile.value = e.target.files[0] || null
+}
+
+async function doSplit() {
+  if (!splitSelectedFile.value || splitting.value) return
+  splitting.value = true
+  splitProgress.value = 0
+  try {
+    const res = await splitFile(splitSelectedFile.value, splitNTiles.value, pct => { splitProgress.value = pct })
+    const url = URL.createObjectURL(res.data)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = splitSelectedFile.value.name.replace(/\.[^.]+$/, '') + '.zip'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    splitModal.value = false
+    splitSelectedFile.value = null
+  } catch (err) {
+    alert('Split failed: ' + (err.message || 'unknown error'))
+  } finally {
+    splitting.value = false
+    splitProgress.value = 0
+  }
+}
+
 </script>
 
 <style scoped>
@@ -283,4 +352,39 @@ h3 { color: #adf; font-size: 13px; font-weight: 600; margin-bottom: 12px; text-t
 .patch-id { color: #aac; font-family: monospace; flex: 1; padding: 0 6px; }
 .labelled-badge { color: #4f4; font-size: 10px; font-weight: 700; margin-right: 4px; flex-shrink: 0; }
 .patch-pts { color: #778; }
+
+.split-btn {
+  background: #2a3a3e;
+  border-color: #4a8a8e;
+  color: #aef;
+}
+.split-btn:hover { background: #3a4a5e; }
+
+/* Modal overlay */
+.split-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.split-box {
+  background: #12122a;
+  border: 1px solid #335;
+  border-radius: 10px;
+  padding: 28px 32px;
+  min-width: 360px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.split-box h3 { margin: 0; color: #adf; font-size: 1.1rem; }
+.split-row { display: flex; align-items: center; gap: 12px; }
+.split-row label { width: 44px; color: #889; font-size: 13px; }
+.split-row select, .split-row input[type=file] {
+  flex: 1; background: #1a1a3a; border: 1px solid #445;
+  color: #cce; border-radius: 6px; padding: 5px 8px; font-size: 13px;
+}
+.split-filename { margin: 0; font-size: 12px; color: #77a; }
+.split-progress { margin: 0; font-size: 12px; color: #7af; }
+.split-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+.split-go { background: #2a5a3e; border-color: #4a9a6e; color: #afa; }
+.split-go:hover:not(:disabled) { background: #3a6a4e; }
 </style>

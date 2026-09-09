@@ -351,6 +351,27 @@ async function runPrediction(version = 'finetune') {
   try {
     const res = await predictPatch(route.params.id, route.params.patchId, version, store.dtmGrid)
     const labels = res.data.labels
+
+    // DTM ground-level filter: relabel tree points that are below MIN_TREE_HAG
+    // as non-tree.  This removes misclassified ground, lamp-posts, and building
+    // bases that sit within the DTM elevation band before watershed runs.
+    if (store.dtmGrid) {
+      const positions = getPositions()
+      const { grid, rows, cols, xMin, yMin, xRange, yRange } = store.dtmGrid
+      const MIN_TREE_HAG = 1.5  // metres — adjust if too aggressive
+      let filtered = 0
+      for (let i = 0; i < labels.length; i++) {
+        if (labels[i] !== 101) continue
+        const x = positions[i * 3]
+        const y = positions[i * 3 + 1]
+        const z = positions[i * 3 + 2]
+        const cx = Math.max(0, Math.min(cols - 1, Math.floor((x - xMin) / xRange * cols)))
+        const cy = Math.max(0, Math.min(rows - 1, Math.floor((y - yMin) / yRange * rows)))
+        if (z - grid[cy * cols + cx] < MIN_TREE_HAG) { labels[i] = 0; filtered++ }
+      }
+      if (filtered > 0) console.log(`[DTM filter] removed ${filtered} ground-level tree points (HAG < ${MIN_TREE_HAG}m)`)
+    }
+
     applyPredictionColors(labels)
     store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
     store.hasPrediction = true

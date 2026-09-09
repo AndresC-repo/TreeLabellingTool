@@ -128,3 +128,14 @@ export const restoreFromClient = (sessionId, patchId, buffer) =>
 
 export const deletePoints = (sessionId, patchId, pointIndices) =>
   api.post(`/patches/${sessionId}/${patchId}/delete-points`, { point_indices: pointIndices })
+
+export const splitFile = (file, nTiles, onProgress) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('n_tiles', nTiles)
+  return api.post('/files/split', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob',
+    onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
+  })
+}
