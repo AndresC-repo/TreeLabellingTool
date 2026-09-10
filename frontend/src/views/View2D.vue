@@ -67,30 +67,65 @@
 
   <!-- Split modal -->
   <teleport to="body">
-    <div v-if="splitModal" class="split-overlay" @click.self="splitModal = false">
+    <div v-if="splitModal" class="split-overlay" @click.self="splitStage === 'idle' && (splitModal = false)">
       <div class="split-box">
         <h3>Split LAS / LAZ into tiles</h3>
-        <div class="split-row">
-          <label>File</label>
-          <input type="file" accept=".las,.LAS,.laz,.LAZ" @change="onSplitFileSelected" />
-        </div>
-        <div class="split-row">
-          <label>Tiles</label>
-          <select v-model="splitNTiles">
-            <option :value="4">4 tiles  (2 × 2)</option>
-            <option :value="8">8 tiles  (2 × 4)</option>
-            <option :value="16">16 tiles (4 × 4)</option>
-            <option :value="32">32 tiles (4 × 8)</option>
-          </select>
-        </div>
-        <p v-if="splitSelectedFile" class="split-filename">{{ splitSelectedFile.name }}</p>
-        <p v-if="splitProgress" class="split-progress">Uploading… {{ splitProgress }}%</p>
-        <div class="split-actions">
-          <button @click="splitModal = false">Cancel</button>
-          <button class="split-go" :disabled="!splitSelectedFile || splitting" @click="doSplit">
-            {{ splitting ? 'Processing…' : 'Split & Download' }}
-          </button>
-        </div>
+
+        <!-- Stage: idle — pick file + tile count -->
+        <template v-if="splitStage === 'idle'">
+          <div class="split-row">
+            <label>File</label>
+            <input type="file" accept=".las,.LAS,.laz,.LAZ" @change="onSplitFileSelected" />
+          </div>
+          <div class="split-row">
+            <label>Tiles</label>
+            <select v-model="splitNTiles">
+              <option :value="4">4 tiles  (2 × 2)</option>
+              <option :value="8">8 tiles  (2 × 4)</option>
+              <option :value="16">16 tiles (4 × 4)</option>
+              <option :value="32">32 tiles (4 × 8)</option>
+            </select>
+          </div>
+          <p v-if="splitSelectedFile" class="split-filename">📄 {{ splitSelectedFile.name }}</p>
+          <div class="split-actions">
+            <button @click="splitModal = false">Cancel</button>
+            <button class="split-go" :disabled="!splitSelectedFile" @click="doSplit">Upload & Split</button>
+          </div>
+        </template>
+
+        <!-- Stage: uploading -->
+        <template v-else-if="splitStage === 'uploading'">
+          <p class="split-status">⬆ Uploading file…</p>
+          <div class="split-progress-bar">
+            <div class="split-progress-fill" :style="{ width: splitUploadPct + '%' }"></div>
+          </div>
+          <p class="split-pct">{{ splitUploadPct }}%</p>
+        </template>
+
+        <!-- Stage: splitting -->
+        <template v-else-if="splitStage === 'splitting'">
+          <p class="split-status">⚙ Server is splitting tiles…</p>
+          <div class="split-progress-bar indeterminate"><div class="split-progress-fill indeterminate-bar"></div></div>
+          <p class="split-hint">This may take a moment for large files.</p>
+        </template>
+
+        <!-- Stage: ready -->
+        <template v-else-if="splitStage === 'ready'">
+          <p class="split-status success">✅ Done! {{ splitTileCount }} tiles ready.</p>
+          <div class="split-actions">
+            <button @click="splitReset">Close</button>
+            <button class="split-go" @click="saveSplitZip">💾 Save ZIP…</button>
+          </div>
+        </template>
+
+        <!-- Stage: saved -->
+        <template v-else-if="splitStage === 'saved'">
+          <p class="split-status success">✅ Done! ZIP saved.</p>
+          <div class="split-actions">
+            <button @click="splitReset">Close</button>
+          </div>
+        </template>
+
       </div>
     </div>
   </teleport>
@@ -198,37 +233,78 @@ async function loadWholePatch() {
 }
 
 // --- Split feature ---
-const splitModal = ref(false)
-const splitNTiles = ref(4)
+const splitModal    = ref(false)
+const splitNTiles   = ref(4)
 const splitSelectedFile = ref(null)
-const splitting = ref(false)
-const splitProgress = ref(0)
+const splitStage    = ref('idle')   // 'idle' | 'uploading' | 'splitting' | 'ready'
+const splitUploadPct = ref(0)
+const splitZipBlob  = ref(null)
+const splitZipName  = ref('')
+const splitTileCount = ref(0)
 
 function onSplitFileSelected(e) {
   splitSelectedFile.value = e.target.files[0] || null
 }
 
+function splitReset() {
+  splitModal.value    = false
+  splitStage.value    = 'idle'
+  splitSelectedFile.value = null
+  splitZipBlob.value  = null
+  splitUploadPct.value = 0
+  splitTileCount.value = 0
+}
+
 async function doSplit() {
-  if (!splitSelectedFile.value || splitting.value) return
-  splitting.value = true
-  splitProgress.value = 0
+  if (!splitSelectedFile.value) return
+  splitZipName.value = splitSelectedFile.value.name.replace(/\.[^.]+$/, '') + '.zip'
+  splitStage.value   = 'uploading'
+  splitUploadPct.value = 0
   try {
-    const res = await splitFile(splitSelectedFile.value, splitNTiles.value, pct => { splitProgress.value = pct })
-    const url = URL.createObjectURL(res.data)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = splitSelectedFile.value.name.replace(/\.[^.]+$/, '') + '.zip'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(url)
-    splitModal.value = false
-    splitSelectedFile.value = null
+    const res = await splitFile(
+      splitSelectedFile.value,
+      splitNTiles.value,
+      pct => {
+        splitUploadPct.value = pct
+        if (pct >= 100) splitStage.value = 'splitting'
+      }
+    )
+    // Count tiles from ZIP (use Content-Disposition or just store nTiles)
+    splitZipBlob.value  = res.data
+    splitTileCount.value = splitNTiles.value   // exact count from server isn't exposed; close enough
+    splitStage.value    = 'ready'
   } catch (err) {
+    splitStage.value = 'idle'
     alert('Split failed: ' + (err.message || 'unknown error'))
-  } finally {
-    splitting.value = false
-    splitProgress.value = 0
+  }
+}
+
+async function saveSplitZip() {
+  const blob = splitZipBlob.value
+  if (!blob) return
+  try {
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: splitZipName.value,
+        types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+    } else {
+      // Fallback: browser-chosen downloads folder
+      const url = URL.createObjectURL(blob)
+      const a   = document.createElement('a')
+      a.href    = url
+      a.download = splitZipName.value
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+    splitStage.value = 'saved'
+  } catch (err) {
+    if (err.name !== 'AbortError') alert('Save failed: ' + err.message)
   }
 }
 
@@ -372,7 +448,7 @@ h3 { color: #adf; font-size: 13px; font-weight: 600; margin-bottom: 12px; text-t
   border: 1px solid #335;
   border-radius: 10px;
   padding: 28px 32px;
-  min-width: 360px;
+  min-width: 380px;
   display: flex; flex-direction: column; gap: 16px;
 }
 .split-box h3 { margin: 0; color: #adf; font-size: 1.1rem; }
@@ -383,7 +459,30 @@ h3 { color: #adf; font-size: 13px; font-weight: 600; margin-bottom: 12px; text-t
   color: #cce; border-radius: 6px; padding: 5px 8px; font-size: 13px;
 }
 .split-filename { margin: 0; font-size: 12px; color: #77a; }
-.split-progress { margin: 0; font-size: 12px; color: #7af; }
+.split-status { margin: 0; font-size: 14px; color: #adf; font-weight: 500; }
+.split-status.success { color: #7fa; }
+.split-hint { margin: 0; font-size: 12px; color: #668; }
+.split-pct { margin: 0; font-size: 12px; color: #7af; text-align: right; }
+
+/* Progress bar */
+.split-progress-bar {
+  height: 6px; background: #223; border-radius: 3px; overflow: hidden;
+}
+.split-progress-fill {
+  height: 100%; background: #4af; border-radius: 3px;
+  transition: width 0.2s;
+}
+/* Indeterminate animation */
+.split-progress-bar.indeterminate { position: relative; }
+@keyframes indeterminate {
+  0%   { left: -40%; width: 40%; }
+  100% { left: 100%; width: 40%; }
+}
+.indeterminate-bar {
+  position: absolute; width: 40%;
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
 .split-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
 .split-go { background: #2a5a3e; border-color: #4a9a6e; color: #afa; }
 .split-go:hover:not(:disabled) { background: #3a6a4e; }
