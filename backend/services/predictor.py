@@ -1,6 +1,7 @@
 """
 Inference service for SegmentAnyTree models.
 
+metric       -- XYZ, METRES     in_channels=3  best_model_m.pth         (finetuned on metric data)
 finetune     -- XYZ             in_channels=3  best_model.pth           (finetuned)
 finetune_int -- XYZ + Intensity in_channels=4  best_model_int.pth       (finetuned)
 scratch      -- XYZ             in_channels=3  best_model_scratch.pth   (trained from scratch)
@@ -15,9 +16,20 @@ from huggingface_hub import hf_hub_download
 from services.segment_any_tree import SegmentAnyTree
 
 _MODEL_REPO = "AndCarr/UrbanTreeDetector"
-_VOXEL_SIZE = 0.08  # metres -- must match training (finetune_config.yaml: voxel_size: 0.08)
+_VOXEL_SIZE = 0.08  # model-frame units -- must match training (finetune_config.yaml: voxel_size: 0.08)
 
-# Sliding-window inference constants
+# ── Units ─────────────────────────────────────────────────────────────────────
+# Each model config has 'input_units':
+#   'raw' -- the model was trained on coordinates in the files' own units (the older
+#            models: mostly US survey feet read as if metres). Input is fed as-is.
+#   'm'   -- the model was trained in metres. x, y, z (and the DTM) are multiplied by
+#            the file's metres-per-unit before voxelising, so 0.08 = 8 cm.
+# Everything downstream (voxels, tiling, offsets, clustering) runs in this "model frame".
+# Clustering parameters coming from the UI (bandwidth, max_spread) are in METRES and are
+# converted into the model frame. Outputs are per-point labels, so nothing has to be
+# converted back.
+
+# Sliding-window inference constants (model-frame units: metres for 'm' models)
 # The model was trained on small patches (~20-30 m diameter).
 # When the input exceeds _MAX_DIRECT_M in X or Y we tile it into overlapping
 # windows, run the model on each tile, and merge by averaging softmax scores.
@@ -27,8 +39,17 @@ _TILE_STEP_M  =  60.0   # step between tiles (50 % overlap)
 _MIN_TILE_PTS =  20     # skip tiles with fewer points than this
 
 _MODEL_CONFIGS: dict[str, dict] = {
+    'metric': {
+        'filename':           'best_model_m.pth',
+        'in_channels':        3,
+        'use_intensity':      False,
+        'use_classification': False,
+        'input_units':        'm',
+        'label':              'Metric — XYZ (m)',
+    },
     'finetune': {
         'filename':           'best_model.pth',
+        'input_units':        'raw',
         'in_channels':        3,
         'use_intensity':      False,
         'use_classification': False,
@@ -36,6 +57,7 @@ _MODEL_CONFIGS: dict[str, dict] = {
     },
     'finetune_int': {
         'filename':           'best_model_int.pth',
+        'input_units':        'raw',
         'in_channels':        4,
         'use_intensity':      True,
         'use_classification': False,
@@ -43,6 +65,7 @@ _MODEL_CONFIGS: dict[str, dict] = {
     },
     'scratch': {
         'filename':           'best_model_scratch.pth',
+        'input_units':        'raw',
         'in_channels':        3,
         'use_intensity':      False,
         'use_classification': False,
@@ -50,6 +73,7 @@ _MODEL_CONFIGS: dict[str, dict] = {
     },
     'scratch_int': {
         'filename':           'best_model_scratch_int.pth',
+        'input_units':        'raw',
         'in_channels':        4,
         'use_intensity':      True,
         'use_classification': False,
@@ -367,6 +391,41 @@ def _predict_with_tiling(
 
 
 # ---------------------------------------------------------------------------
+# Model frame (units + local origin)
+# ---------------------------------------------------------------------------
+
+def _model_frame(cfg: dict, x, y, z, metres_per_unit: float, dtm: dict) -> tuple:
+    """Return float32 x, y, z in the model's frame, the converted DTM kwargs and the
+    model-frame units per metre.
+
+    x/y are first shifted to a local origin in float64: casting absolute coordinates
+    to float32 (e.g. eastings ~2.65e6 ft) quantises them to ~0.25 units — coarser than
+    the 0.08 voxels. The model centres every tile anyway, so the shift changes nothing
+    else.
+    """
+    f = float(metres_per_unit) if cfg.get('input_units') == 'm' else 1.0
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    ox = float(np.floor(x.min())) if len(x) else 0.0
+    oy = float(np.floor(y.min())) if len(y) else 0.0
+    xf = ((x - ox) * f).astype(np.float32)
+    yf = ((y - oy) * f).astype(np.float32)
+    zf = (np.asarray(z, dtype=np.float64) * f).astype(np.float32)
+
+    dtm_out = dict(dtm)
+    if dtm.get('dtm_grid') is not None:
+        dtm_out['dtm_grid']    = (np.asarray(dtm['dtm_grid'], dtype=np.float64) * f).tolist()
+        dtm_out['dtm_x_min']   = (dtm['dtm_x_min'] - ox) * f
+        dtm_out['dtm_y_min']   = (dtm['dtm_y_min'] - oy) * f
+        dtm_out['dtm_x_range'] = dtm['dtm_x_range'] * f
+        dtm_out['dtm_y_range'] = dtm['dtm_y_range'] * f
+
+    # model-frame units per metre: 1 for metric models, 1/metres_per_unit for raw ones
+    units_per_m = 1.0 if cfg.get('input_units') == 'm' else 1.0 / float(metres_per_unit or 1.0)
+    return xf, yf, zf, dtm_out, units_per_m
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -385,11 +444,13 @@ def predict(
     dtm_y_min: float = 0.0,
     dtm_x_range: float = 1.0,
     dtm_y_range: float = 1.0,
+    metres_per_unit: float = 1.0,
 ) -> np.ndarray:
     """Per-point semantic prediction.
 
     Args:
-        x, y, z        : float32 (N,) world coordinates
+        x, y, z        : (N,) world coordinates in the file's units (float64 preferred)
+        metres_per_unit: file units -> metres (0.3048006 for US survey feet)
         intensity      : float32 (N,) raw intensity  (required for v3, v4)
         classification : float32 (N,) ASPRS class    (required for v2, v4)
         version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
@@ -408,18 +469,19 @@ def predict(
 
     model = _get_model(version)
 
-    x32  = x.astype(np.float32)
-    y32  = y.astype(np.float32)
-    z32  = z.astype(np.float32)
+    dtm = dict(dtm_grid=dtm_grid, dtm_rows=dtm_rows, dtm_cols=dtm_cols, dtm_x_min=dtm_x_min,
+               dtm_y_min=dtm_y_min, dtm_x_range=dtm_x_range, dtm_y_range=dtm_y_range)
+    x32, y32, z32, dtm, _ = _model_frame(cfg, x, y, z, metres_per_unit, dtm)
     int_ = intensity.astype(np.float32)      if (intensity      is not None and cfg['use_intensity'])      else None
     cls_ = classification.astype(np.float32) if (classification is not None and cfg['use_classification']) else None
 
     extent_x = float(x32.max() - x32.min())
     extent_y = float(y32.max() - y32.min())
-    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m")
+    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f} x {extent_y:.1f} "
+          f"({'m' if cfg.get('input_units') == 'm' else 'file units'})")
 
-    terrain_z = _compute_terrain_z(x32, y32, z32, dtm_grid, dtm_rows, dtm_cols,
-                                   dtm_x_min, dtm_y_min, dtm_x_range, dtm_y_range)
+    terrain_z = _compute_terrain_z(x32, y32, z32, dtm['dtm_grid'], dtm['dtm_rows'], dtm['dtm_cols'],
+                                   dtm['dtm_x_min'], dtm['dtm_y_min'], dtm['dtm_x_range'], dtm['dtm_y_range'])
 
     if cache_key and cache_key in _NN_CACHE:
         print(f"[predictor:{version}] Using cached NN outputs for semantic ...")
@@ -512,18 +574,20 @@ def predict_instances(
     dtm_y_min: float = 0.0,
     dtm_x_range: float = 1.0,
     dtm_y_range: float = 1.0,
+    metres_per_unit: float = 1.0,
 ) -> np.ndarray:
     """Per-point instance segmentation using all three model heads.
 
     Args:
-        x, y, z        : float32 (N,) world coordinates
+        x, y, z        : (N,) world coordinates in the file's units (float64 preferred)
+        metres_per_unit: file units -> metres (0.3048006 for US survey feet)
         intensity      : float32 (N,) raw intensity (required for v3, v4)
         classification : float32 (N,) ASPRS class  (required for v2, v4)
         version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
-        bandwidth      : mean-shift bandwidth in metres
+        bandwidth      : mean-shift bandwidth in metres (converted to the model frame)
         min_points     : minimum cluster size to be kept as a tree
         embed_weight   : embedding vs XY weighting for clustering
-        max_spread     : DBSCAN eps for spatial coherence (metres)
+        max_spread     : DBSCAN eps for spatial coherence in metres (converted)
 
     Returns:
         labels : int32 (N,) -- 0=non-tree, 201,202,...=tree instances
@@ -539,18 +603,23 @@ def predict_instances(
 
     model = _get_model(version)
 
-    x32  = x.astype(np.float32)
-    y32  = y.astype(np.float32)
-    z32  = z.astype(np.float32)
+    dtm = dict(dtm_grid=dtm_grid, dtm_rows=dtm_rows, dtm_cols=dtm_cols, dtm_x_min=dtm_x_min,
+               dtm_y_min=dtm_y_min, dtm_x_range=dtm_x_range, dtm_y_range=dtm_y_range)
+    x32, y32, z32, dtm, units_per_m = _model_frame(cfg, x, y, z, metres_per_unit, dtm)
     int_ = intensity.astype(np.float32)      if (intensity      is not None and cfg['use_intensity'])      else None
     cls_ = classification.astype(np.float32) if (classification is not None and cfg['use_classification']) else None
 
+    # bandwidth / max_spread arrive in metres -> model frame
+    bandwidth  = bandwidth  * units_per_m
+    max_spread = max_spread * units_per_m
+
     extent_x = float(x32.max() - x32.min())
     extent_y = float(y32.max() - y32.min())
-    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f}m x {extent_y:.1f}m -- 3-head ...")
+    print(f"[predictor:{version}] {len(x32):,} pts, {extent_x:.1f} x {extent_y:.1f} "
+          f"({'m' if cfg.get('input_units') == 'm' else 'file units'}) -- 3-head ...")
 
-    terrain_z = _compute_terrain_z(x32, y32, z32, dtm_grid, dtm_rows, dtm_cols,
-                                   dtm_x_min, dtm_y_min, dtm_x_range, dtm_y_range)
+    terrain_z = _compute_terrain_z(x32, y32, z32, dtm['dtm_grid'], dtm['dtm_rows'], dtm['dtm_cols'],
+                                   dtm['dtm_x_min'], dtm['dtm_y_min'], dtm['dtm_x_range'], dtm['dtm_y_range'])
 
     if cache_key and cache_key in _NN_CACHE:
         print(f"[predictor:{version}] Cache hit — skipping NN forward pass ...")
@@ -574,7 +643,8 @@ def predict_instances(
     output = np.zeros(len(x), dtype=np.int32)
 
     if n_tree > 0:
-        xyz_tree = np.stack([x, y, z], axis=1)[tree_mask]
+        # Cluster in the model frame: offsets are predicted in model-frame units
+        xyz_tree = np.stack([x32, y32, z32], axis=1)[tree_mask]
         inst_labels = _cluster_instances(
             xyz_tree, pt_offs[tree_mask], pt_embs[tree_mask],
             bandwidth=bandwidth, min_points=min_points,

@@ -67,6 +67,7 @@ async function onDeleteClipped() {
 
 function onLabelsBulkApplied(labels) {
   renderer3d.value?.applyLabelsBulkColors(Array.from(labels))
+  store.bumpLabels()
   store.viewMode = 'classification'
 }
 

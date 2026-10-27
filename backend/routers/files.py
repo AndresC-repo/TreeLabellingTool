@@ -1,3 +1,4 @@
+import copy
 import io
 import os
 import shutil
@@ -8,8 +9,10 @@ import laspy
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse
-from models.schemas import UploadResponse, Bounds
+from models.schemas import UploadResponse, Bounds, UnitsRequest
 from services.las_reader import create_session, get_las_path, read_metadata, get_session_dir
+from services.sessions import purge_session, list_patch_ids, is_valid_session_id
+from services.units import detect_units, describe, get_session_units, set_session_units
 import config
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
@@ -41,10 +44,17 @@ def upload_file(file: UploadFile = File(...)):
         shutil.rmtree(get_session_dir(session_id), ignore_errors=True)
         raise HTTPException(500, "Failed to process uploaded file")
 
-    # Persist original filename
+    # Persist original filename + metadata so /info never has to re-read the LAS file
+    units = detect_units(dest, meta["bounds"]["x"][0])
     (get_session_dir(session_id) / "meta.json").write_text(
-        __import__("json").dumps({"filename": file.filename})
+        __import__("json").dumps({"filename": file.filename, **meta, "units": units})
     )
+    try:
+        from services import dataset_registry as dreg
+        dreg.upsert_source(file.filename, units=units.get("code"), units_source=units.get("source"),
+                           point_count=int(meta["point_count"]))
+    except Exception as e:   # the registry must never block an upload
+        print(f"[dataset] could not record source: {e}")
 
     return UploadResponse(
         session_id=session_id,
@@ -52,28 +62,63 @@ def upload_file(file: UploadFile = File(...)):
         point_count=meta["point_count"],
         bounds=Bounds(**meta["bounds"]),
         available_fields=meta["available_fields"],
+        units=describe(units),
     )
 
 
 @router.get("/{session_id}/info", response_model=UploadResponse)
 def get_info(session_id: str):
     import json
+    if not is_valid_session_id(session_id):
+        raise HTTPException(404, "Session not found")
     las_path = get_las_path(session_id)
     if not las_path.exists():
         raise HTTPException(404, "Session not found")
 
-    # Read persisted original filename
     meta_path = get_session_dir(session_id) / "meta.json"
-    filename = json.loads(meta_path.read_text())["filename"] if meta_path.exists() else las_path.name
+    stored = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    if "point_count" in stored:
+        meta = stored
+    else:
+        # Older session without cached metadata: compute once and persist
+        meta = read_metadata(session_id)
+        stored = {"filename": stored.get("filename", las_path.name), **meta}
+        meta_path.write_text(json.dumps(stored))
 
-    meta = read_metadata(session_id)
     return UploadResponse(
         session_id=session_id,
-        filename=filename,
+        filename=stored.get("filename", las_path.name),
         point_count=meta["point_count"],
         bounds=Bounds(**meta["bounds"]),
         available_fields=meta["available_fields"],
+        patch_count=len(list_patch_ids(session_id)),
+        units=get_session_units(session_id),
     )
+
+
+@router.post("/{session_id}/units")
+def set_units(session_id: str, req: UnitsRequest):
+    """Override the detected linear units of a file (all heights/distances depend on it)."""
+    if not is_valid_session_id(session_id) or not get_session_dir(session_id).exists():
+        raise HTTPException(404, "Session not found")
+    try:
+        return set_session_units(session_id, req.units)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/{session_id}")
+def delete_session(session_id: str):
+    """Remove an uploaded file and everything derived from it (patches, outputs, caches).
+
+    Training examples live in storage/training and are NOT affected.
+    """
+    # Only accept real session ids (UUIDs) so the path can't escape SESSIONS_DIR
+    if not is_valid_session_id(session_id):
+        raise HTTPException(400, "Invalid session id")
+    if not get_session_dir(session_id).exists():
+        raise HTTPException(404, "Session not found")
+    return {"ok": True, "deleted_patches": purge_session(session_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -136,29 +181,12 @@ async def split_file(
 
                     patch_num += 1
 
-                    new_header = laspy.LasHeader(
-                        point_format=las.header.point_format,
-                        version=las.header.version,
-                    )
-                    new_las = laspy.LasData(header=new_header)
-                    new_las.x = las.x[mask]
-                    new_las.y = las.y[mask]
-                    new_las.z = las.z[mask]
-                    new_las.classification = las.classification[mask]
-
-                    try:
-                        new_las.intensity = las.intensity[mask]
-                    except Exception:
-                        pass
-
-                    for dim in las.point_format.extra_dimension_names:
-                        try:
-                            setattr(new_las, dim, getattr(las, dim)[mask])
-                        except Exception:
-                            pass
+                    # Copy the source header (scales, offsets, CRS/VLRs, extra dims) and
+                    # every point dimension (returns, GPS time, RGB, labels, …).
+                    new_las = laspy.LasData(copy.deepcopy(las.header), points=las.points[mask])
 
                     patch_buf = io.BytesIO()
-                    new_las.write(patch_buf)
+                    new_las.write(patch_buf, do_compress=False)
                     patch_buf.seek(0)
                     zf.writestr(f"{stem}/{stem}_patch_{patch_num}.las", patch_buf.read())
 

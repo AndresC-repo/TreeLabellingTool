@@ -4,10 +4,15 @@ services:
     volumes:
       - ./backend:/app
       - storage_data:/app/storage
+      # Training data folder of the NN repo: exports go to <it>/labels and the dataset
+      # registry (labelling_registry.json) is stored next to them. Override with
+      # DATASET_DIR_HOST in .env if the repo lives elsewhere.
+      - ${DATASET_DIR_HOST:-../../urban-tree-detection/data}:/dataset
     ports:
       - "8000:8000"
     environment:
       - PYTHONDONTWRITEBYTECODE=1
+      - DATASET_DIR=/dataset
       # Tell PyTorch/spconv there are zero CUDA devices.
       # spconv-cu118 selects ConvAlgo.MaskImplicitGemm (GPU-only) by default;
       # with no visible CUDA device it falls back to ConvAlgo.Native (CPU).

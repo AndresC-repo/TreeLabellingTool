@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict
 
 class Bounds(BaseModel):
     x: List[float]
@@ -12,6 +12,12 @@ class UploadResponse(BaseModel):
     point_count: int
     bounds: Bounds
     available_fields: List[str]
+    patch_count: int = 0
+    # Linear units of the file: {code: m|ftUS|ft, name, scale (metres per unit), source: crs|guess|default|user}
+    units: Optional[Dict[str, Any]] = None
+
+class UnitsRequest(BaseModel):
+    units: str   # "m" | "ftUS" | "ft"
 
 class ExtractionRequest(BaseModel):
     selection_type: str  # "rectangle" or "polygon"
@@ -38,12 +44,16 @@ class BulkLabelRequest(BaseModel):
     labels: List[int]   # one label value per point, length must equal patch point count
 
 class SaveRequest(BaseModel):
-    output_filename: str
+    output_filename: Optional[str] = None   # None/empty = automatic name
+    to_labels: bool = True                  # also write into the training labels folder
 
 class SaveResponse(BaseModel):
     download_url: str
     output_filename: str
     point_count: int
+    trees: int = 0
+    saved_to: Optional[str] = None          # path in the labels folder (None if not written)
+    labels_folder_connected: bool = False
 
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
@@ -55,6 +65,10 @@ class SegmentTreesRequest(BaseModel):
     max_radius: float = 1.0
     min_tree_points: int = 500
     min_crown_cells: int = 70
+    # Local maxima lower than this (m) are not used as seeds; None = same as min_height
+    min_peak_height: Optional[float] = None
+    # Blob filter as an area (m²); when set it replaces min_crown_cells
+    min_crown_area: Optional[float] = None
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
     # When provided it is used for per-point terrain height instead of re-deriving from the LAS file.
     dtm_grid: Optional[List[float]] = None   # flat array, dtm_rows * dtm_cols values
@@ -70,6 +84,8 @@ class SegmentTreesResponse(BaseModel):
     tree_count: int
     peaks: List[List[float]]       # [[x, y, z], ...] — valid tree tops (after merge filter)
     seed_peaks: List[List[float]]  # [[x, y, z], ...] — ALL CHM local maxima (watershed seeds)
+    rejected_peaks: List[List[float]] = []   # maxima dropped by min_peak_height
+    stats: Optional[Dict[str, Any]] = None   # what each step did (counts, warning)
 
 class TreeMetricsRequest(BaseModel):
     labels: List[int]              # per-point instance labels (201+=instances)
@@ -150,3 +166,5 @@ class UndoResponse(BaseModel):
     full_reload: bool = False
     indices: List[int] = []
     label_values: List[int] = []
+    undo_depth: int = 0      # steps left to undo
+    redo_depth: int = 0      # steps available to redo

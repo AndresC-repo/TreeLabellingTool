@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 from pathlib import Path
 from typing import Optional
 import uuid
@@ -78,9 +79,7 @@ def _extract_cached(
 
     # One pass through the .las file with 10x larger chunks.
     # np.searchsorted locates which chunk rows to extract in O(log K).
-    x_all, y_all, z_all = [], [], []
-    class_all, int_all, ret_all, label_all = [], [], [], []
-    has_label_dim = None
+    raw_all = []   # full point records (every dimension, incl. extra bytes)
     src_header = None
     offset = 0
 
@@ -91,26 +90,14 @@ def _extract_cached(
             lo = int(np.searchsorted(selected, offset))
             hi = int(np.searchsorted(selected, offset + clen))
             if lo < hi:
-                if has_label_dim is None:
-                    has_label_dim = hasattr(chunk, "label")
                 idx = selected[lo:hi] - offset   # local row positions in this chunk
-                x_all.append(np.asarray(chunk.x)[idx])
-                y_all.append(np.asarray(chunk.y)[idx])
-                z_all.append(np.asarray(chunk.z)[idx])
-                class_all.append(np.asarray(chunk.classification)[idx])
-                int_all.append(np.asarray(chunk.intensity)[idx])
-                ret_all.append(np.asarray(chunk.number_of_returns)[idx])
-                if has_label_dim:
-                    label_all.append(np.asarray(chunk.label)[idx])
+                raw_all.append(chunk.array[idx])
             offset += clen
 
-    if not x_all:
+    if not raw_all:
         return _empty(patch_id)
 
-    return _write_patch(
-        patch_id, patch_path, src_header,
-        x_all, y_all, z_all, class_all, int_all, ret_all, label_all,
-    )
+    return _write_patch(patch_id, patch_path, src_header, raw_all)
 
 
 def _compute_mask(xy, x_off, y_off, selection_type, bounds_2d, polygon_2d) -> np.ndarray:
@@ -146,9 +133,7 @@ def _compute_mask(xy, x_off, y_off, selection_type, bounds_2d, polygon_2d) -> np
 def _extract_legacy(
     las_path, patch_path, patch_id, selection_type, bounds_2d, polygon_2d,
 ) -> dict:
-    x_all, y_all, z_all = [], [], []
-    class_all, int_all, ret_all = [], [], []
-    label_all = []
+    raw_all = []   # full point records (every dimension, incl. extra bytes)
 
     poly_bbox = None
     if selection_type == "polygon" and polygon_2d:
@@ -162,10 +147,7 @@ def _extract_legacy(
 
     with laspy.open(las_path) as f:
         src_header = f.header
-        has_label_dim = None
         for chunk in f.chunk_iterator(DECIMATION_CHUNK_SIZE):
-            if has_label_dim is None:
-                has_label_dim = hasattr(chunk, "label")
             cx = np.asarray(chunk.x, dtype=np.float64)
             cy = np.asarray(chunk.y, dtype=np.float64)
 
@@ -193,53 +175,39 @@ def _extract_legacy(
             if not mask.any():
                 continue
 
-            x_all.append(np.asarray(chunk.x)[mask])
-            y_all.append(np.asarray(chunk.y)[mask])
-            z_all.append(np.asarray(chunk.z)[mask])
-            class_all.append(np.asarray(chunk.classification)[mask])
-            int_all.append(np.asarray(chunk.intensity)[mask])
-            ret_all.append(np.asarray(chunk.number_of_returns)[mask])
-            if has_label_dim:
-                label_all.append(np.asarray(chunk.label)[mask])
+            raw_all.append(chunk.array[mask])
 
-    if not x_all:
+    if not raw_all:
         return _empty(patch_id)
 
-    return _write_patch(
-        patch_id, patch_path, src_header,
-        x_all, y_all, z_all, class_all, int_all, ret_all, label_all,
-    )
+    return _write_patch(patch_id, patch_path, src_header, raw_all)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
-def _write_patch(patch_id, patch_path, src_header,
-                 x_all, y_all, z_all, class_all, int_all, ret_all, label_all) -> dict:
-    x = np.concatenate(x_all)
-    y = np.concatenate(y_all)
-    z = np.concatenate(z_all)
-    classification = np.concatenate(class_all)
-    intensity = np.concatenate(int_all)
-    returns = np.concatenate(ret_all)
+def _write_patch(patch_id, patch_path, src_header, raw_all) -> dict:
+    """Write the selected points with EVERY dimension of the source file.
+
+    The header (scales, offsets, VLRs incl. the CRS, extra-bytes definitions such as
+    'label') is copied from the source, so nothing is lost: return numbers, GPS time,
+    RGB, scan angle, the CRS and previously saved tree labels all carry over.
+    (Previously only x/y/z/classification/intensity/number_of_returns were kept.)
+    """
+    header = copy.deepcopy(src_header)
+    points = laspy.ScaleAwarePointRecord(
+        np.concatenate(raw_all), header.point_format, header.scales, header.offsets,
+    )
+    new_las = laspy.LasData(header, points=points)
+    # Patches are always stored uncompressed (.las) even if the source was .laz
+    new_las.write(str(patch_path), do_compress=False)
+
+    x = np.asarray(new_las.x); y = np.asarray(new_las.y); z = np.asarray(new_las.z)
+    classification = np.asarray(new_las.classification)
     full_labels = (
-        np.concatenate(label_all).astype(np.int32)
-        if label_all
+        np.asarray(new_las.label).astype(np.int32)
+        if "label" in new_las.point_format.extra_dimension_names
         else classification.astype(np.int32)
     )
-
-    new_las = laspy.LasData(
-        header=laspy.LasHeader(
-            point_format=src_header.point_format,
-            version=src_header.version,
-        )
-    )
-    new_las.x = x
-    new_las.y = y
-    new_las.z = z
-    new_las.classification = classification.astype(np.uint8)
-    new_las.intensity = intensity.astype(np.uint16)
-    new_las.number_of_returns = returns.astype(np.uint8)
-    new_las.write(str(patch_path))
 
     return {
         "patch_id": patch_id,

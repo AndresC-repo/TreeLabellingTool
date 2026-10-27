@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 
 export const usePatch3DStore = defineStore('patch3d', () => {
   const patchId = ref(null)
@@ -36,6 +36,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const segmentationPeaks   = ref([])
   // [[x,y,z], ...] ALL CHM local maxima used as watershed seeds (for visualisation)
   const segmentationSeedPeaks = ref([])
+  // [[x,y,z], ...] local maxima rejected by min peak height (grey dots)
+  const segmentationRejectedPeaks = ref([])
 
   // Undo signal — set after a successful undo to trigger color rebuild in CanvasRenderer3D
   const undoResult = ref(null)   // { full_reload, indices, label_values } | null
@@ -45,6 +47,14 @@ export const usePatch3DStore = defineStore('patch3d', () => {
 
   // DTM grid from point cloud view — passed to backend for CHM-based segmentation
   // null when no class-2 ground points exist in the patch
+  // World x/y of the 3D view's local origin (positions are relative to it)
+  const originX = ref(0)
+  const originY = ref(0)
+  // Linear units of the data. All segmentation settings are in metres; the backend
+  // converts them. unitScale = metres per data unit (0.3048006 for US survey feet).
+  const unitCode   = ref('m')
+  const unitScale  = ref(1)
+  const unitSource = ref('default')   // crs | guess | default | user
   const dtmGrid = ref(null)  // { grid: float[], rows, cols, xMin, yMin, xRange, yRange }
 
   // Z bounds of the loaded patch — for elevation filter slider
@@ -66,6 +76,12 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const zClipMin = ref(0)
   const zClipMax = ref(0)
   const clipActive = ref(false)
+
+  // Bumped on every label change (apply, undo, redo, bulk apply) so panels can refresh
+  // things that depend on the labels (undo/redo depth, tree count in the file name).
+  const labelsVersion = ref(0)
+  function bumpLabels() { labelsVersion.value++ }
+  watch([lastApplied, undoResult], () => { labelsVersion.value++ })
 
   function addAppliedLabel(labelValue) {
     if (labelValue !== 0 && !appliedLabels.value.includes(labelValue)) {
@@ -94,9 +110,13 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     semanticLabels.value    = null
     segmentationPeaks.value = []
     segmentationSeedPeaks.value = []
+    segmentationRejectedPeaks.value = []
     undoResult.value = null
     groundIndices.value = []
     dtmGrid.value = null
+    originX.value = 0
+    originY.value = 0
+    unitCode.value = 'm'; unitScale.value = 1; unitSource.value = 'default'
     zBoundsMin.value = 0
     zBoundsMax.value = 0
     elevFilterMin.value = 0
@@ -111,12 +131,13 @@ export const usePatch3DStore = defineStore('patch3d', () => {
 
   return {
     patchId, patchNumber, pointCount, nextLabel, selectedIndices, appliedLabels,
+    labelsVersion, bumpLabels,
     savedUrl, lassoProcessing, viewMode, lastApplied,
     protectClasses, showAllLabels, baseGround,
     predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion,
-    segmentationPeaks, segmentationSeedPeaks,
-    undoResult, groundIndices, dtmGrid, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks,
+    undoResult, groundIndices, dtmGrid, originX, originY, unitCode, unitScale, unitSource, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
     xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive,
     addAppliedLabel, reset,

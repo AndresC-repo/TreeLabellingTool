@@ -154,6 +154,7 @@ const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
+  { id: 'metric',       label: 'XYZ (m)', desc: 'Metric model — input converted to metres', title: 'Inference — metric model (best_model_m.pth), XYZ in metres' },
   { id: 'finetune',     label: 'XYZ',   desc: 'Coordinates only',  title: 'Inference — XYZ only [I]' },
   { id: 'finetune_int', label: 'XYZ+I', desc: 'XYZ + Intensity',   title: 'Inference — XYZ + Intensity' },
 ]
@@ -175,6 +176,7 @@ function onClickOutsideInference(e) {
 let controls = null
 let peaksMesh = null      // red dots — valid tree tops (after merge filter)
 let seedPeaksMesh = null  // yellow dots — all CHM local maxima (watershed seeds)
+let rejectedPeaksMesh = null  // grey dots — maxima below min peak height
 let axisRenderer = null
 let axisScene = null
 let axisCamera = null
@@ -348,6 +350,7 @@ async function runPrediction(version = 'finetune') {
   store.predicting = true
   store.inferenceVersion = version
   store.segmentationPeaks = []   // clear previous peaks when re-running inference
+  store.segmentationRejectedPeaks = []
   try {
     const res = await predictPatch(route.params.id, route.params.patchId, version, store.dtmGrid)
     const labels = res.data.labels
@@ -358,7 +361,7 @@ async function runPrediction(version = 'finetune') {
     if (store.dtmGrid) {
       const positions = getPositions()
       const { grid, rows, cols, xMin, yMin, xRange, yRange } = store.dtmGrid
-      const MIN_TREE_HAG = 1.5  // metres — adjust if too aggressive
+      const MIN_TREE_HAG = 1.5 / (store.unitScale || 1)  // 1.5 m, in the data's units
       let filtered = 0
       for (let i = 0; i < labels.length; i++) {
         if (labels[i] !== 101) continue
@@ -369,7 +372,7 @@ async function runPrediction(version = 'finetune') {
         const cy = Math.max(0, Math.min(rows - 1, Math.floor((y - yMin) / yRange * rows)))
         if (z - grid[cy * cols + cx] < MIN_TREE_HAG) { labels[i] = 0; filtered++ }
       }
-      if (filtered > 0) console.log(`[DTM filter] removed ${filtered} ground-level tree points (HAG < ${MIN_TREE_HAG}m)`)
+      if (filtered > 0) console.log(`[DTM filter] removed ${filtered} ground-level tree points (HAG < 1.5 m)`)
     }
 
     applyPredictionColors(labels)
@@ -498,9 +501,11 @@ watch(
 
 function _buildPointsMesh(positions, color, size) {
   if (!positions?.length) return null
+  // Backend peaks are in world coordinates; the scene is in local x/y
+  const ox = store.originX, oy = store.originY
   const pos = new Float32Array(positions.length * 3)
   positions.forEach(([px, py, pz], i) => {
-    pos[i * 3] = px; pos[i * 3 + 1] = py; pos[i * 3 + 2] = pz
+    pos[i * 3] = px - ox; pos[i * 3 + 1] = py - oy; pos[i * 3 + 2] = pz
   })
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
@@ -513,9 +518,14 @@ function _rebuildPeaksMeshes() {
   // Remove existing
   if (peaksMesh)     { scene.value.remove(peaksMesh);     peaksMesh.geometry.dispose();     peaksMesh.material.dispose();     peaksMesh = null }
   if (seedPeaksMesh) { scene.value.remove(seedPeaksMesh); seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose(); seedPeaksMesh = null }
+  if (rejectedPeaksMesh) { scene.value.remove(rejectedPeaksMesh); rejectedPeaksMesh.geometry.dispose(); rejectedPeaksMesh.material.dispose(); rejectedPeaksMesh = null }
 
   const inferenceActive = store.viewMode === 'prediction' || store.viewMode === 'inference-chm'
   if (!inferenceActive) return
+
+  // Grey dots = local maxima rejected by min peak height
+  const rm = _buildPointsMesh(store.segmentationRejectedPeaks, 0x8a8a9a, 6)
+  if (rm) { rejectedPeaksMesh = rm; scene.value.add(rejectedPeaksMesh) }
 
   // Yellow smaller dots = ALL CHM local maxima (watershed seeds)
   const sm = _buildPointsMesh(store.segmentationSeedPeaks, 0xffcc00, 6)
@@ -528,6 +538,8 @@ function _rebuildPeaksMeshes() {
 
 watch(() => store.segmentationPeaks,     _rebuildPeaksMeshes)
 watch(() => store.segmentationSeedPeaks, _rebuildPeaksMeshes)
+watch(() => store.segmentationRejectedPeaks, _rebuildPeaksMeshes)
+watch(() => [store.originX, store.originY], _rebuildPeaksMeshes)
 watch(() => store.viewMode, _rebuildPeaksMeshes)
 
 onMounted(async () => {
@@ -536,6 +548,11 @@ onMounted(async () => {
   store.pointCount = pointCount.value
 
   if (result) {
+    store.originX = result.origin?.x ?? 0
+    store.originY = result.origin?.y ?? 0
+    if (result.units) {
+      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source
+    }
     store.groundIndices = result.groundIndices ?? []
     store.zBoundsMin = result.zMin ?? 0
     store.zBoundsMax = result.zMax ?? 0
@@ -591,6 +608,7 @@ onBeforeUnmount(() => {
   controls?.dispose()
   if (peaksMesh)     { peaksMesh.geometry.dispose();     peaksMesh.material.dispose() }
   if (seedPeaksMesh) { seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose() }
+  if (rejectedPeaksMesh) { rejectedPeaksMesh.geometry.dispose(); rejectedPeaksMesh.material.dispose() }
   if (axisAnimId) cancelAnimationFrame(axisAnimId)
   axisRenderer?.dispose()
   dispose()
@@ -671,6 +689,11 @@ async function reloadPatch() {
   const result = await load()
   store.pointCount = pointCount.value
   if (result) {
+    store.originX = result.origin?.x ?? 0
+    store.originY = result.origin?.y ?? 0
+    if (result.units) {
+      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source
+    }
     store.groundIndices = result.groundIndices ?? []
     store.zBoundsMin = result.zMin ?? 0; store.zBoundsMax = result.zMax ?? 0
     store.elevFilterMin = result.zMin ?? 0; store.elevFilterMax = result.zMax ?? 0

@@ -28,10 +28,13 @@ def compute_tree_metrics(
     dtm_y_min: float = 0.0,
     dtm_x_range: float = 1.0,
     dtm_y_range: float = 1.0,
+    unit_scale: float = 1.0,    # metres per data unit; cell_size is in metres, results in metres
 ) -> list[dict]:
-    """Return a list of metric dicts sorted by tree ID."""
-    x = np.asarray(x, dtype=np.float32)
-    y = np.asarray(y, dtype=np.float32)
+    """Return a list of metric dicts sorted by tree ID (all lengths in metres, areas in m²)."""
+    us = float(unit_scale) if unit_scale and unit_scale > 0 else 1.0
+    cell_size = cell_size / us
+    x = np.asarray(x, dtype=np.float64)   # float32 loses ~0.5 m at state-plane/UTM coordinates
+    y = np.asarray(y, dtype=np.float64)
     z = np.asarray(z, dtype=np.float32)
     labels = np.asarray(labels, dtype=np.int32)
 
@@ -63,8 +66,8 @@ def compute_tree_metrics(
             fallback = float(z[gnd].mean())
         else:
             fallback = float(z.min())
-        dtm_flat[dtm_flat == np.inf] = fallback
-        dtm_2d = dtm_flat.reshape(rows, cols)
+        from services.tree_segmentor import _fill_nearest
+        dtm_2d = _fill_nearest(dtm_flat.reshape(rows, cols), fallback)
         pr, pc = _rc(x, y)
         terrain_z = dtm_2d[pr, pc]
 
@@ -101,13 +104,13 @@ def compute_tree_metrics(
 
         metrics.append({
             'id':           int(tid),
-            'height':       round(Ht, 2),
-            'base_height':  round(Hb, 2),
-            'crown_length': round(Lc, 2),
-            'crown_width':  round(cw, 2),
-            'width_ew':     round(width_ew, 2),
-            'width_ns':     round(width_ns, 2),
-            'crown_area':   round(ca, 1),
+            'height':       round(Ht * us, 2),
+            'base_height':  round(Hb * us, 2),
+            'crown_length': round(Lc * us, 2),
+            'crown_width':  round(cw * us, 2),
+            'width_ew':     round(width_ew * us, 2),
+            'width_ns':     round(width_ns * us, 2),
+            'crown_area':   round(ca * us * us, 1),
             'point_count':  int(mask.sum()),
         })
 

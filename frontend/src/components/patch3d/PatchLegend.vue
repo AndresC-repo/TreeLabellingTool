@@ -75,7 +75,7 @@ onMounted(refresh)
 watch(() => store.lastApplied, (v) => { if (v) refresh() })
 
 async function tryRestorePatch() {
-  const { positions, origCls } = getPatchCache()
+  const { positions, origCls, origin } = getPatchCache()
   if (!positions || !origCls) return false
   const n = positions.length / 3
   const buf = new Float32Array(n * 4)
@@ -86,7 +86,7 @@ async function tryRestorePatch() {
     buf[i*4+3] = origCls[i]
   }
   try {
-    await restoreFromClient(route.params.id, route.params.patchId, buf.buffer)
+    await restoreFromClient(route.params.id, route.params.patchId, buf.buffer, origin)
     return true
   } catch {
     return false

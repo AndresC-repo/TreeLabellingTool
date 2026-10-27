@@ -9,12 +9,29 @@ _patch_counters: dict[str, int] = {}
 _patch_number_map: dict[str, int] = {}
 
 
-def register_patch(session_id: str, patch_id: str) -> int:
-    """Assign the next sequential patch number for a session. Returns the number."""
-    n = _patch_counters.get(session_id, 0) + 1
+def register_patch(session_id: str, patch_id: str, start_after: int = 0) -> int:
+    """Assign the next sequential patch number for a session. Returns the number.
+
+    start_after: highest number already used on disk, so numbering continues
+    correctly after a backend restart (the in-memory counter starts at 0).
+    """
+    n = max(_patch_counters.get(session_id, 0), start_after) + 1
     _patch_counters[session_id] = n
     _patch_number_map[patch_id] = n
     return n
+
+
+def forget_session(session_id: str, patch_ids: list[str]) -> None:
+    """Drop all in-memory label state for a deleted session."""
+    _patch_counters.pop(session_id, None)
+    for pid in patch_ids:
+        _state.pop(pid, None)
+        _patch_number_map.pop(pid, None)
+
+
+def forget_patch(patch_id: str) -> None:
+    _state.pop(patch_id, None)
+    _patch_number_map.pop(patch_id, None)
 
 
 def get_patch_number(patch_id: str) -> int:
@@ -40,6 +57,7 @@ def init_patch(
         "orig_cls":   orig,
         "used":       {int(v) for v in np.unique(labels) if v != 0},
         "undo_stack": [],
+        "redo_stack": [],
     }
 
 
@@ -52,13 +70,40 @@ def get_next_label(patch_id: str) -> int:
 
 
 _PROTECTED_CLASSES = frozenset({2, 6})   # ASPRS ground, building
-_UNDO_LIMIT = 20
+
+# History: up to _UNDO_LIMIT steps per patch, but never more than _HISTORY_BYTES of
+# saved labels (a "full" step stores a copy of every point's label — 4 MB per million
+# points — so on big patches the byte budget, not the step count, is the limit).
+_UNDO_LIMIT = 200
+_HISTORY_BYTES = 256 * 1024 ** 2
+
+
+def _entry_bytes(entry: dict) -> int:
+    n = entry["prev"].nbytes
+    if entry["type"] == "selective":
+        n += len(entry["indices"]) * 8
+    return n
+
+
+def _trim(stack: list) -> None:
+    while len(stack) > _UNDO_LIMIT:
+        stack.pop(0)
+    while len(stack) > 1 and sum(_entry_bytes(e) for e in stack) > _HISTORY_BYTES:
+        stack.pop(0)
 
 
 def _push_undo(state: dict, entry: dict) -> None:
+    """Record a new user operation. A new operation invalidates anything to redo."""
     state["undo_stack"].append(entry)
-    if len(state["undo_stack"]) > _UNDO_LIMIT:
-        state["undo_stack"].pop(0)
+    state.setdefault("redo_stack", []).clear()
+    _trim(state["undo_stack"])
+
+
+def history_depth(patch_id: str) -> dict:
+    state = _state.get(patch_id)
+    if not state:
+        return {"undo_depth": 0, "redo_depth": 0}
+    return {"undo_depth": len(state["undo_stack"]), "redo_depth": len(state.get("redo_stack", []))}
 
 
 def apply_label(
@@ -132,28 +177,45 @@ def apply_labels_bulk(patch_id: str, labels: np.ndarray) -> dict:
     }
 
 
-def undo_last(patch_id: str) -> "dict | None":
-    """Pop the last operation from the undo stack and restore previous labels.
+def _restore(state: dict, entry: dict) -> tuple[dict, dict]:
+    """Apply a history entry; return (inverse entry for the other stack, response)."""
+    if entry["type"] == "selective":
+        idx = entry["indices"]
+        inverse = {"type": "selective", "indices": idx, "prev": state["labels"][idx].copy()}
+        state["labels"][idx] = entry["prev"]
+        state["used"] = {int(v) for v in np.unique(state["labels"]) if v != 0}
+        return inverse, {"full_reload": False, "indices": idx, "label_values": entry["prev"].tolist()}
+    inverse = {"type": "full", "prev": state["labels"].copy()}
+    state["labels"] = entry["prev"].copy()
+    state["used"] = {int(v) for v in np.unique(state["labels"]) if v != 0}
+    return inverse, {"full_reload": True, "indices": [], "label_values": state["labels"].tolist()}
 
-    Returns a dict describing what was restored, or None if the stack is empty.
+
+def undo_last(patch_id: str) -> "dict | None":
+    """Undo the last operation (it moves to the redo stack).
+
+    Returns a dict describing what was restored, or None if there is nothing to undo.
     For selective undos: { full_reload: False, indices: [int], label_values: [int] }
     For full undos:      { full_reload: True,  indices: [],    label_values: [int] }
     """
     state = _state.get(patch_id)
     if not state or not state["undo_stack"]:
         return None
-    entry = state["undo_stack"].pop()
-    if entry["type"] == "selective":
-        idx = entry["indices"]
-        prev = entry["prev"]
-        state["labels"][idx] = prev
-        state["used"] = {int(v) for v in np.unique(state["labels"]) if v != 0}
-        return {"full_reload": False, "indices": idx, "label_values": prev.tolist()}
-    else:  # "full"
-        prev = entry["prev"]
-        state["labels"] = prev
-        state["used"] = {int(v) for v in np.unique(prev) if v != 0}
-        return {"full_reload": True, "indices": [], "label_values": prev.tolist()}
+    inverse, response = _restore(state, state["undo_stack"].pop())
+    state.setdefault("redo_stack", []).append(inverse)
+    _trim(state["redo_stack"])
+    return response
+
+
+def redo_last(patch_id: str) -> "dict | None":
+    """Re-apply the last undone operation (it moves back to the undo stack)."""
+    state = _state.get(patch_id)
+    if not state or not state.get("redo_stack"):
+        return None
+    inverse, response = _restore(state, state["redo_stack"].pop())
+    state["undo_stack"].append(inverse)
+    _trim(state["undo_stack"])
+    return response
 
 
 def get_labels(patch_id: str) -> Optional[np.ndarray]:

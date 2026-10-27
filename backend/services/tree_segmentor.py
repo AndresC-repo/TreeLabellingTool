@@ -24,10 +24,13 @@ Algorithm
       c.  Apply an N×N uniform (moving-average) filter over the gap-filled CHM.
       d.  Optional additional Gaussian smoothing (smooth_sigma > 0).
 5.  Detect local maxima in the smoothed CHM using peak_local_max with a
-    minimum inter-peak distance of `min_distance` cells and a height threshold
-    of `min_height` metres.  These are the watershed seed markers.
+    minimum inter-peak distance of `min_distance` cells.  Maxima lower than
+    `min_peak_height` (defaults to `min_height`) are rejected, so short
+    vegetation can stay in the canopy without seeding its own "tree".
+    The remaining maxima are the watershed seed markers.
 6.  Run marker-based watershed on −CHM (inverted so peaks become basins)
     within the canopy mask (CHM ≥ min_height AND tree-point cells).
+    Canopy that is not connected to any seed stays unassigned.
 7.  For visualisation: report the actual CHM-peak position within each basin
     as the seed point (always on top of the tree, not at the smoothed peak).
 8.  Post-process: merge basins with fewer than `min_tree_points` by re-running
@@ -36,7 +39,7 @@ Algorithm
 """
 from __future__ import annotations
 import numpy as np
-from scipy.ndimage import uniform_filter, gaussian_filter, label as nd_label
+from scipy.ndimage import uniform_filter, gaussian_filter, label as nd_label, maximum_position, distance_transform_edt
 from scipy.spatial import cKDTree
 from skimage.feature import peak_local_max
 from skimage.segmentation import watershed
@@ -65,7 +68,8 @@ def _duncanson_smooth(
     nbr_val_sum    = uniform_filter(chm * is_canopy, size=3) * 9.0 - chm * is_canopy
 
     # Mean canopy value from neighbours (safe divide)
-    canopy_mean = np.where(nbr_canopy_sum > 0, nbr_val_sum / nbr_canopy_sum, 0.0)
+    canopy_mean = np.divide(nbr_val_sum, nbr_canopy_sum,
+                            out=np.zeros_like(nbr_val_sum), where=nbr_canopy_sum > 0)
 
     # Within-crown gap: ground cell with ≥ 4 canopy neighbours
     within_crown_gap = (is_canopy < 0.5) & (nbr_canopy_sum >= 4.0)
@@ -82,6 +86,22 @@ def _duncanson_smooth(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _fill_nearest(grid: np.ndarray, fallback: float) -> np.ndarray:
+    """Fill cells without ground (inf) with the nearest cell that has ground.
+
+    Using the patch-wide mean instead (the old behaviour) puts the terrain at the
+    wrong height under crowns and buildings, where ground returns are missing.
+    """
+    empty = ~np.isfinite(grid)
+    if not empty.any():
+        return grid
+    if empty.all():
+        return np.full_like(grid, fallback)
+    _, (ir, ic) = distance_transform_edt(empty, return_indices=True)
+    return grid[ir, ic]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 def segment_tree_instances(
     x: np.ndarray,
     y: np.ndarray,
@@ -95,8 +115,19 @@ def segment_tree_instances(
     min_distance: int = 10,        # min peak separation (cells) for seed detection
     min_tree_points: int = 500,    # merge basins smaller than this
     min_crown_cells: int = 70,     # remove isolated canopy blobs smaller than this (cells)
-    # Unused legacy params (kept for API compatibility):
+    # Points outside the canopy mask join the nearest tree top if within this XY distance (m)
     max_radius: float = 15.0,
+    # Local maxima lower than this (m above terrain) are not used as seeds. None = min_height.
+    min_peak_height: float | None = None,
+    # Blob filter as an area (m²); overrides min_crown_cells so it doesn't depend on cell_size.
+    min_crown_area: float | None = None,
+    # Minimum distance between tree tops in metres; overrides min_distance (cells).
+    min_tree_spacing: float | None = None,
+    # When True, a 5th value is returned: a dict describing what each step did.
+    return_stats: bool = False,
+    # Metres per coordinate unit (1.0 = metres, 0.3048006 = US survey feet). All distance
+    # parameters above are given in METRES and converted to the data's units here.
+    unit_scale: float = 1.0,
     # External DTM from the point-cloud view
     dtm_grid: np.ndarray | None = None,
     dtm_rows: int = 64,
@@ -112,14 +143,81 @@ def segment_tree_instances(
     new_labels  : int32 (N,)     0 = non-tree, 201+ = individual instances
     tree_count  : int            number of valid instances
     peaks       : float32 (K,3) [x,y,z] of valid tree tops (after merge)
-    seed_peaks  : float32 (M,3) [x,y,z] of ALL CHM local maxima (watershed seeds)
+    seed_peaks  : float32 (M,3) [x,y,z] of ALL CHM local maxima used as watershed seeds
+    stats       : dict (only when return_stats=True) — counts per step, plus
+                  "rejected_peaks": [[x,y,z], ...] maxima dropped by min_peak_height
     """
-    EMPTY = np.empty((0, 3), dtype=np.float32)
+    EMPTY = np.empty((0, 3), dtype=np.float64)
+    x = np.asarray(x, dtype=np.float64)   # float32 only resolves ~0.5 m at UTM northings
+    y = np.asarray(y, dtype=np.float64)
     new_labels = labels.copy().astype(np.int32)
     tree_mask  = labels == 101
+    orig_tree_mask = tree_mask.copy()
+
+    # ── Metre parameters → data units ─────────────────────────────────────────
+    us = float(unit_scale) if unit_scale and unit_scale > 0 else 1.0
+    cell_size  = cell_size / us
+    min_height = min_height / us
+    max_radius = max_radius / us
+    if min_peak_height is not None:
+        min_peak_height = min_peak_height / us
+    if min_crown_area is not None:
+        min_crown_area = min_crown_area / (us * us)
+
+    if min_tree_spacing is not None:
+        min_distance = max(1, int(round((min_tree_spacing / us) / cell_size)))
+
+    peak_floor = float(min_height if min_peak_height is None else max(min_peak_height, min_height))
+    if min_crown_area is not None:
+        min_crown_cells = int(np.ceil(max(0.0, min_crown_area) / (cell_size * cell_size)))
+
+    stats: dict = {
+        "tree_points": int(tree_mask.sum()),
+        "canopy_cells": 0,
+        "canopy_area_m2": 0.0,
+        "points_below_min_height": 0,     # tree points lower than min_height above terrain → non-tree
+        "blobs_removed": 0,
+        "blob_points_removed": 0,
+        "min_crown_cells_used": int(min_crown_cells),
+        "min_distance_cells_used": int(min_distance),
+        "peaks_found": 0,                 # local maxima ≥ min_height
+        "peaks_below_peak_height": 0,     # rejected by min_peak_height
+        "seeds_used": 0,
+        "basins_merged": 0,               # basins below min_tree_points, re-flooded
+        "points_nn_assigned": 0,          # outside canopy, joined nearest tree top
+        "points_unassigned": 0,           # tree points that ended up non-tree
+        "trees": 0,
+        "warning": None,
+        "rejected_peaks": [],
+    }
+
+    _hat = [None]   # per-point height above terrain, set once the terrain is known
+
+    def _done(labels_out, count, peaks_out, seeds_out):
+        # Per-point rule: nothing lower than min_height above the terrain is a tree,
+        # even if it sits under a crown (trunks, low branches, understorey).
+        if _hat[0] is not None:
+            low = orig_tree_mask & (labels_out >= 201) & (_hat[0] < min_height)
+            labels_out[low] = 0
+            stats["points_below_min_height"] = int(low.sum())
+            if count and low.any():
+                count = int(np.unique(labels_out[labels_out >= 201]).size)
+        stats["trees"] = int(count)
+        stats["points_unassigned"] = int((orig_tree_mask & (labels_out < 201)).sum())
+        if return_stats:
+            return labels_out, count, peaks_out, seeds_out, stats
+        return labels_out, count, peaks_out, seeds_out
+
+    def _ungrouped(reason: str):
+        # No usable seeds: keep every original tree point as one ungrouped tree
+        # (never hand the "tree" label to leftover points while dropping the rest)
+        stats["warning"] = reason
+        out = labels.copy().astype(np.int32)
+        out[orig_tree_mask] = 201
+        return _done(out, 1, EMPTY, EMPTY)
 
     if not np.any(tree_mask):
-        return new_labels, 0, EMPTY, EMPTY
+        return _done(new_labels, 0, EMPTY, EMPTY)
 
     # ── CHM grid ──────────────────────────────────────────────────────────────
     x_min, x_max = float(x.min()), float(x.max())
@@ -151,14 +249,15 @@ def segment_tree_instances(
             fallback = float(z[gnd].mean())
         else:
             fallback = float(z.min())
-        dtm_flat[dtm_flat == np.inf] = fallback
         dtm_2d = dtm_flat.reshape(rows, cols)
+        dtm_2d = _fill_nearest(dtm_2d, fallback)
         pr_all, pc_all = _rc(x, y)
         terrain_z = dtm_2d[pr_all, pc_all]
         print(f"[tree_segmentor] internal DTM (fallback={fallback:.1f}m)")
 
     # ── Rasterise CHM from tree points ────────────────────────────────────────
     hat = np.maximum(0.0, z - terrain_z).astype(np.float32)   # height above terrain
+    _hat[0] = hat
     tr, tc = _rc(x[tree_mask], y[tree_mask])
 
     chm_flat = np.full(flat, -np.inf, dtype=np.float32)
@@ -200,6 +299,8 @@ def segment_tree_instances(
             tr, tc = tr[keep], tc[keep]
             tree_mask = np.zeros(len(labels), dtype=bool)
             tree_mask[tree_mask_arr[keep]] = True
+            stats["blobs_removed"] = int(remove_ids.size)
+            stats["blob_points_removed"] = int(removed_pts.sum())
             print(f"[tree_segmentor] removed {remove_ids.size} isolated blob(s) "
                   f"({removed_pts.sum():,} pts → label 0)")
 
@@ -208,21 +309,40 @@ def segment_tree_instances(
           f"smooth_window={smooth_window}, min_height={min_height}m, "
           f"min_distance={min_distance}")
 
+    stats["canopy_cells"] = int(canopy_mask.sum())
+    stats["canopy_area_m2"] = round(float(canopy_mask.sum()) * (cell_size * us) ** 2, 1)
+
     if not canopy_mask.any():
         print("[tree_segmentor] no canopy cells above min_height — returning single instance")
-        new_labels[tree_mask] = 201
-        return new_labels, 1, EMPTY, EMPTY
+        return _ungrouped("No canopy left above min height (or all removed by the blob filter).")
 
     # ── Local maxima detection (peak_local_max, paper §2.4 step 3) ───────────
     # peak_local_max returns an (N,2) coordinate array in skimage >= 0.19.
     # Convert to a boolean mask so nd_label / watershed can use it.
-    peak_coords = peak_local_max(
+    all_peaks = peak_local_max(
         chm_smooth,
         min_distance=max(1, min_distance),
         threshold_abs=min_height,
-        labels=canopy_mask,    # only search within canopy mask
+        labels=canopy_mask.astype(np.int32),    # only search within canopy mask
         exclude_border=False,
     )
+    peak_heights = chm_smooth[all_peaks[:, 0], all_peaks[:, 1]] if len(all_peaks) else np.empty(0)
+    keep_peak = peak_heights >= peak_floor
+    peak_coords = all_peaks[keep_peak]
+    rejected = all_peaks[~keep_peak]
+    stats["peaks_found"] = int(len(all_peaks))
+    stats["peaks_below_peak_height"] = int(len(rejected))
+    if len(rejected):
+        rx = x_min + rejected[:, 1] * cell_size + cell_size / 2
+        ry = y_min + rejected[:, 0] * cell_size + cell_size / 2
+        if dtm_grid is not None:
+            rcx = np.clip(((rx - dtm_x_min) / dtm_x_range * dtm_cols).astype(np.int32), 0, dtm_cols - 1)
+            rcy = np.clip(((ry - dtm_y_min) / dtm_y_range * dtm_rows).astype(np.int32), 0, dtm_rows - 1)
+            rterrain = dtm_arr[rcy, rcx]
+        else:
+            rterrain = dtm_2d[rejected[:, 0], rejected[:, 1]]
+        rz = rterrain + chm[rejected[:, 0], rejected[:, 1]]
+        stats["rejected_peaks"] = np.column_stack([rx, ry, rz]).tolist()
     peaks_mask = np.zeros(chm_smooth.shape, dtype=bool)
     if len(peak_coords):
         peaks_mask[peak_coords[:, 0], peak_coords[:, 1]] = True
@@ -230,11 +350,12 @@ def segment_tree_instances(
     # Label each peak as a separate marker (some may be adjacent → nd_label)
     peak_markers, n_peaks = nd_label(peaks_mask)
 
-    print(f"[tree_segmentor] {n_peaks} seed peaks detected")
+    stats["seeds_used"] = int(n_peaks)
+    print(f"[tree_segmentor] {n_peaks} seed peaks detected "
+          f"({len(rejected)} below min_peak_height={peak_floor}m)")
 
     if n_peaks == 0:
-        new_labels[tree_mask] = 201
-        return new_labels, 1, EMPTY, EMPTY
+        return _ungrouped("No local maxima reach the min peak height.")
 
     # ── Seeded watershed on inverted CHM ─────────────────────────────────────
     ws = watershed(-chm_smooth, markers=peak_markers, mask=canopy_mask)
@@ -249,20 +370,16 @@ def segment_tree_instances(
     flat_chm = chm_smooth.ravel()
     flat_raw = chm.ravel()          # unsmoothed CHM for actual tree-top height
 
+    # Highest smoothed-CHM cell of every basin (vectorised)
     peak_flat_idx = np.zeros(n_peaks + 1, dtype=np.int64)
-    peak_val_buf  = np.full(n_peaks + 1, -np.inf, dtype=np.float32)
-    valid_cells   = flat_ws > 0
-    for i in np.where(valid_cells)[0]:
-        bid = int(flat_ws[i])
-        v   = float(flat_chm[i])
-        if v > peak_val_buf[bid]:
-            peak_val_buf[bid] = v
-            peak_flat_idx[bid] = i
+    if len(basin_ids):
+        pos = maximum_position(chm_smooth, labels=ws, index=basin_ids)
+        peak_flat_idx[basin_ids] = [r * cols + c for r, c in pos]
 
     seed_r = (peak_flat_idx[basin_ids] // cols).astype(np.int32)
     seed_c = (peak_flat_idx[basin_ids] % cols).astype(np.int32)
-    seed_px = (x_min + seed_c * cell_size + cell_size / 2).astype(np.float32)
-    seed_py = (y_min + seed_r * cell_size + cell_size / 2).astype(np.float32)
+    seed_px = x_min + seed_c * cell_size + cell_size / 2
+    seed_py = y_min + seed_r * cell_size + cell_size / 2
 
     # Absolute Z: terrain at seed + raw (unsmoothed) CHM at seed cell
     if dtm_grid is not None:
@@ -275,8 +392,8 @@ def segment_tree_instances(
         srr, scc = _rc(seed_px, seed_py)
         seed_terrain = dtm_2d[srr, scc]
 
-    seed_pz = (seed_terrain + flat_raw[peak_flat_idx[basin_ids]]).astype(np.float32)
-    seed_peaks_out = np.column_stack([seed_px, seed_py, seed_pz]).astype(np.float32)
+    seed_pz = seed_terrain + flat_raw[peak_flat_idx[basin_ids]]
+    seed_peaks_out = np.column_stack([seed_px, seed_py, seed_pz]).astype(np.float64)
 
     # ── Map tree points to watershed basins ───────────────────────────────────
     # Points outside the canopy mask (ws==0) get NN-assigned to the nearest peak
@@ -286,6 +403,7 @@ def segment_tree_instances(
         point_basin > 0, 200 + point_basin, 0
     ).astype(np.int32)
     _unassigned = instance_ids == 0
+    stats["points_nn_assigned"] = 0
     if _unassigned.any():
         _kd = cKDTree(np.column_stack([seed_px, seed_py]))
         _dists, _nn = _kd.query(np.column_stack([x[tree_mask][_unassigned],
@@ -293,6 +411,7 @@ def segment_tree_instances(
         _in_range = _dists <= max_radius
         _idx = np.where(_unassigned)[0]
         instance_ids[_idx[_in_range]]  = (200 + basin_ids[_nn[_in_range]]).astype(np.int32)
+        stats["points_nn_assigned"] = int(_in_range.sum())
         # Points beyond max_radius stay 0 (unclassified — inference error)
 
     # ── Post-process: merge small basins ─────────────────────────────────────
@@ -304,9 +423,11 @@ def segment_tree_instances(
 
         if len(valid_inst) == 0:
             # Nothing survives — keep all as one instance
+            stats["warning"] = "Every tree is smaller than min pts / tree — all points kept as one tree."
+            stats["basins_merged"] = int(len(basin_ids))
             new_labels[tree_mask] = 201
             best = int(np.argmax(flat_chm[peak_flat_idx[basin_ids]]))
-            return new_labels, 1, seed_peaks_out[best:best+1], seed_peaks_out
+            return _done(new_labels, 1, seed_peaks_out[best:best+1], seed_peaks_out)
 
         if len(valid_inst) < len(unique_inst):
             # Re-run watershed with only valid seeds as markers
@@ -320,8 +441,8 @@ def segment_tree_instances(
                 new_markers[r_s, c_s] = new_i + 1
                 new_seed_px_list.append(x_min + c_s * cell_size + cell_size / 2)
                 new_seed_py_list.append(y_min + r_s * cell_size + cell_size / 2)
-            new_seed_px = np.array(new_seed_px_list, dtype=np.float32)
-            new_seed_py = np.array(new_seed_py_list, dtype=np.float32)
+            new_seed_px = np.array(new_seed_px_list, dtype=np.float64)
+            new_seed_py = np.array(new_seed_py_list, dtype=np.float64)
 
             ws2 = watershed(-chm_smooth, markers=new_markers, mask=canopy_mask)
             point_basin2 = ws2[tr, tc]
@@ -336,9 +457,11 @@ def segment_tree_instances(
                 _in_range2 = _dists2 <= max_radius
                 _idx2 = np.where(_unassigned2)[0]
                 instance_ids[_idx2[_in_range2]] = (201 + _nn2[_in_range2]).astype(np.int32)
+                stats["points_nn_assigned"] = int(_in_range2.sum())
                 # Points beyond max_radius stay 0 (unclassified — inference error)
 
             valid_peak_basin_ids = valid_basin_ids_orig
+            stats["basins_merged"] = int(len(basin_ids) - len(valid_basin_ids_orig))
             print(f"[tree_segmentor] merged to {len(valid_basin_ids_orig)} valid instances")
 
     new_labels[tree_mask] = instance_ids
@@ -352,4 +475,4 @@ def segment_tree_instances(
     peaks_out = seed_peaks_out[valid_idx] if valid_idx else seed_peaks_out[:1]
 
     print(f"[tree_segmentor] {tree_count} tree instances (Duncanson watershed)")
-    return new_labels, tree_count, peaks_out, seed_peaks_out
+    return _done(new_labels, tree_count, peaks_out, seed_peaks_out)

@@ -52,14 +52,26 @@
     >
       Label GND ({{ store.baseGround }}) <kbd>G</kbd>
     </button>
-    <button
-      class="undo-btn"
-      :disabled="undoing"
-      @click="undoLast"
-      title="Undo last label operation [Ctrl+Z]"
-    >
-      {{ undoing ? 'Undoing…' : 'Undo' }} <kbd>Ctrl+Z</kbd>
-    </button>
+    <div class="history-row">
+      <button
+        class="undo-btn"
+        :disabled="!undoing && history.undo_depth === 0"
+        @click="undoLast"
+        :title="`Undo last label operation [Ctrl+Z] — ${history.undo_depth} step(s) available`"
+      >
+        Undo <kbd>Ctrl+Z</kbd>
+        <span v-if="history.undo_depth" class="depth">{{ history.undo_depth }}</span>
+      </button>
+      <button
+        class="undo-btn redo-btn"
+        :disabled="!undoing && history.redo_depth === 0"
+        @click="redoLast"
+        :title="`Redo [Ctrl+Y or Ctrl+Shift+Z] — ${history.redo_depth} step(s) available`"
+      >
+        Redo <kbd>Ctrl+Y</kbd>
+        <span v-if="history.redo_depth" class="depth">{{ history.redo_depth }}</span>
+      </button>
+    </div>
     <p v-if="store.lassoProcessing" class="hint">Processing lasso selection...</p>
 
     <!-- Replace label X → Y within selection -->
@@ -82,7 +94,7 @@
 import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
-import { labelPoints, getNextLabel, relabelSelection, undoLabel } from '../../api/client.js'
+import { labelPoints, getNextLabel, relabelSelection, undoLabel, redoLabel, getLabelHistory } from '../../api/client.js'
 import { useRoute } from 'vue-router'
 
 const store = usePatch3DStore()
@@ -105,30 +117,64 @@ function decrement() { labelValue.value = Math.max(0, labelValue.value - 1) }
 defineExpose({ applyLabel, applyGnd })
 
 function onKeyDown(e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+  if (!(e.ctrlKey || e.metaKey)) return
+  if (e.target?.tagName === 'INPUT' || e.target?.tagName === 'TEXTAREA') return  // keep text-field undo
+  const k = e.key.toLowerCase()
+  if (k === 'y' || (k === 'z' && e.shiftKey)) {
+    e.preventDefault()
+    redoLast()
+  } else if (k === 'z') {
     e.preventDefault()
     undoLast()
   }
 }
-onMounted(() => window.addEventListener('keydown', onKeyDown))
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  refreshHistory()
+})
+
+// Undo/redo depth from the server (refreshed after every label change)
+const history = ref({ undo_depth: 0, redo_depth: 0 })
+let historyTimer = null
+async function refreshHistory() {
+  try {
+    history.value = (await getLabelHistory(route.params.id, route.params.patchId)).data
+  } catch { /* patch not ready yet — keep last value */ }
+}
+watch(() => store.labelsVersion, () => {
+  clearTimeout(historyTimer)
+  historyTimer = setTimeout(refreshHistory, 150)
+})
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
 
-async function undoLast() {
-  if (undoing.value) return
+// Undo/redo requests run one after another, so quick repeated Ctrl+Z / Ctrl+Y presses
+// are all applied in order instead of being dropped while a request is in flight.
+let historyQueue = Promise.resolve()
+let queued = 0
+function runHistory(apiCall, what) {
+  queued++
   undoing.value = true
+  historyQueue = historyQueue.then(() => doHistory(apiCall, what)).finally(() => {
+    if (--queued === 0) undoing.value = false
+  })
+  return historyQueue
+}
+
+async function doHistory(apiCall, what) {
   try {
-    const res = await undoLabel(route.params.id, route.params.patchId)
+    const res = await apiCall(route.params.id, route.params.patchId)
+    history.value = { undo_depth: res.data.undo_depth, redo_depth: res.data.redo_depth }
     if (res.data.had_operation) {
       store.undoResult = res.data
       store.viewMode = 'classification'
       view2d.markLabelled(route.params.patchId)
     }
   } catch (err) {
-    console.error('Undo failed:', err)
-  } finally {
-    undoing.value = false
+    console.error(`${what} failed:`, err)
   }
 }
+const undoLast = () => runHistory(undoLabel, 'Undo')
+const redoLast = () => runHistory(redoLabel, 'Redo')
 
 async function applyGnd() {
   if (store.selectedIndices.length === 0) return
@@ -277,6 +323,15 @@ input[type="number"]::-webkit-inner-spin-button { opacity: 0.5; }
 }
 .undo-btn:hover:not(:disabled) { background: #3a2a2a; color: #eaa; }
 .undo-btn:disabled { opacity: 0.4; cursor: default; }
+.history-row { display: flex; gap: 6px; }
+.history-row .undo-btn { flex: 1; position: relative; }
+.redo-btn { background: #1a2a22; border-color: #446655; color: #8c9; }
+.redo-btn:hover:not(:disabled) { background: #2a3a2e; color: #aeb; }
+.depth {
+  position: absolute; top: -6px; right: -4px;
+  font-size: 9px; line-height: 14px; min-width: 14px; padding: 0 3px;
+  border-radius: 7px; background: #334; color: #ccd;
+}
 .hint { font-size: 12px; color: #88a; margin-bottom: 8px; }
 .faint { color: #556; }
 .protect-note { color: #668; font-size: 11px; }

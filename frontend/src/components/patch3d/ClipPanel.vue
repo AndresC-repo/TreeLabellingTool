@@ -19,8 +19,8 @@
             v-model.number="store.xClipMax" @input="onClipChange" class="range-input" />
         </div>
         <div class="range-vals">
-          <span>{{ fmt(store.xClipMin) }}</span>
-          <span>{{ fmt(store.xClipMax) }}</span>
+          <span>{{ fmt(store.xClipMin + store.originX) }}</span>
+          <span>{{ fmt(store.xClipMax + store.originX) }}</span>
         </div>
       </div>
 
@@ -34,8 +34,8 @@
             v-model.number="store.yClipMax" @input="onClipChange" class="range-input" />
         </div>
         <div class="range-vals">
-          <span>{{ fmt(store.yClipMin) }}</span>
-          <span>{{ fmt(store.yClipMax) }}</span>
+          <span>{{ fmt(store.yClipMin + store.originY) }}</span>
+          <span>{{ fmt(store.yClipMax + store.originY) }}</span>
         </div>
       </div>
 
@@ -164,6 +164,19 @@ h3 { color: #adf; font-size: 14px; font-weight: 600; margin: 0; }
   background: #7ab3ff;
   border: 2px solid #0d0d1f;
   cursor: pointer;
+}
+.range-input:hover {
+  background: #3a4a6a;
+}
+.range-input:hover::-webkit-slider-thumb {
+  background: #b0d8ff;
+  width: 18px; height: 18px;
+  box-shadow: 0 0 0 4px rgba(122, 179, 255, 0.25);
+}
+.range-input:hover::-moz-range-thumb {
+  background: #b0d8ff;
+  width: 18px; height: 18px;
+  box-shadow: 0 0 0 4px rgba(122, 179, 255, 0.25);
 }
 
 .range-vals {

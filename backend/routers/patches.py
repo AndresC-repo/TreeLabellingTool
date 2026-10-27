@@ -11,8 +11,14 @@ from services import label_manager as lm
 from services.las_reader import get_session_dir
 from services.projection import elevation_to_rgb
 from services.las_writer import save_labeled_patch
+from services import regions as reg
+from services.units import get_session_units
+from services import dataset_registry as dreg
 
 router = APIRouter(prefix="/api/v1/patches", tags=["patches"])
+
+
+_SAFE_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 
 def get_patch_path(session_id: str, patch_id: str) -> Path:
@@ -40,7 +46,23 @@ def extract(session_id: str, req: ExtractionRequest):
 
     # Initialize label state from the extracted classification (avoids redundant file read)
     lm.init_patch(result["patch_id"], result["classification"])
-    patch_number = lm.register_patch(session_id, result["patch_id"])
+    # Patch numbers continue across re-uploads of the same tile (dataset registry),
+    # so exported names like ..._p3_t4.las never collide.
+    source = dreg.session_source(session_id)
+    try:
+        floor = dreg.next_patch_number(source, reg.max_patch_number(session_id)) - 1
+    except Exception as e:
+        print(f"[dataset] numbering fallback: {e}")
+        floor = reg.max_patch_number(session_id)
+    patch_number = lm.register_patch(session_id, result["patch_id"], floor)
+    try:
+        dreg.record_patch(source, patch_number, session_id, result["patch_id"], result["point_count"])
+    except Exception as e:
+        print(f"[dataset] could not record patch: {e}")
+    reg.add_region(
+        session_id, result["patch_id"], patch_number, result["point_count"],
+        req.selection_type, req.bounds_2d, req.polygon_2d,
+    )
 
     return ExtractionResponse(
         patch_id=result["patch_id"],
@@ -50,6 +72,35 @@ def extract(session_id: str, req: ExtractionRequest):
     )
 
 
+@router.get("/{session_id}/regions")
+def list_regions(session_id: str):
+    """Saved 2D selections for a file, so the 2D view can redraw them after a reload."""
+    if not get_session_dir(session_id).exists():
+        raise HTTPException(404, "Session not found")
+    return {"regions": reg.list_regions(session_id)}
+
+
+@router.delete("/{session_id}/{patch_id}")
+def delete_patch(session_id: str, patch_id: str):
+    """Remove one patch: its LAS file, saved outputs, region entry and in-memory state."""
+    if not _SAFE_ID.match(session_id) or not _SAFE_ID.match(patch_id):
+        raise HTTPException(400, "Invalid id")
+    if not reg.remove_region(session_id, patch_id):
+        raise HTTPException(404, "Patch not found")
+    try:
+        dreg.forget_patch(session_id, patch_id)
+    except Exception:
+        pass
+    lm.forget_patch(patch_id)
+    try:
+        from services.predictor import _NN_CACHE
+        for k in [k for k in list(_NN_CACHE) if f":{patch_id}:" in k]:
+            _NN_CACHE.pop(k, None)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @router.get("/{session_id}/{patch_id}/points")
 def get_patch_points(session_id: str, patch_id: str):
     patch_path = get_patch_path(session_id, patch_id)
@@ -57,8 +108,16 @@ def get_patch_points(session_id: str, patch_id: str):
         raise HTTPException(404, "Patch not found")
 
     las = laspy.read(str(patch_path))
-    x = np.array(las.x, dtype=np.float32)
-    y = np.array(las.y, dtype=np.float32)
+    # x/y are sent relative to a local origin: float32 only resolves ~0.5 m at UTM
+    # northings (~5.4e6), which snapped the 3D view into 0.5 m rows. The origin is the
+    # patch minimum snapped to a 100 m grid (stable if edge points are deleted later) and
+    # is returned in X-Origin-X / X-Origin-Y. z stays absolute (it fits float32 fine).
+    x64 = np.array(las.x, dtype=np.float64)
+    y64 = np.array(las.y, dtype=np.float64)
+    origin_x = float(np.floor(x64.min() / 100.0) * 100.0) if len(x64) else 0.0
+    origin_y = float(np.floor(y64.min() / 100.0) * 100.0) if len(y64) else 0.0
+    x = (x64 - origin_x).astype(np.float32)
+    y = (y64 - origin_y).astype(np.float32)
     z = np.array(las.z, dtype=np.float32)
 
     # Prefer in-memory labels (reflect any labeling done this session) over the LAS file.
@@ -83,6 +142,7 @@ def get_patch_points(session_id: str, patch_id: str):
     # Original ASPRS classification — always from las.classification (never overwritten by labelling).
     # Sent as field 8 so the frontend can show the original scan structure in "show only <100" mode.
     orig_asprs = np.array(las.classification, dtype=np.float32)
+    units = get_session_units(session_id)
 
     # Binary layout: [x, y, z, r, g, b, current_label, orig_classification] — 8 float32 per point
     out = np.empty((len(x), 8), dtype=np.float32)
@@ -99,7 +159,12 @@ def get_patch_points(session_id: str, patch_id: str):
         media_type="application/octet-stream",
         headers={
             "X-Point-Count": str(len(x)),
-            "Access-Control-Expose-Headers": "X-Point-Count",
+            "X-Origin-X": repr(origin_x),
+            "X-Origin-Y": repr(origin_y),
+            "X-Unit-Code": units["code"],
+            "X-Unit-Scale": repr(units["scale"]),
+            "X-Unit-Source": units["source"],
+            "Access-Control-Expose-Headers": "X-Point-Count, X-Origin-X, X-Origin-Y, X-Unit-Code, X-Unit-Scale, X-Unit-Source",
         },
     )
 
@@ -114,6 +179,7 @@ def label_points(session_id: str, patch_id: str, req: LabelRequest):
         result = lm.apply_label(patch_id, req.point_indices, req.label_value, req.protect_classes)
     except IndexError as e:
         raise HTTPException(400, str(e))
+    reg.mark_labelled(session_id, patch_id)
     return LabelResponse(**result)
 
 
@@ -126,6 +192,7 @@ def apply_labels_bulk(session_id: str, patch_id: str, req: BulkLabelRequest):
         result = lm.apply_labels_bulk(patch_id, np.array(req.labels, dtype=np.int32))
     except (KeyError, ValueError) as e:
         raise HTTPException(400, str(e))
+    reg.mark_labelled(session_id, patch_id)
     return result
 
 
@@ -147,8 +214,8 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
 
     try:
         las = laspy.read(str(patch_path))
-        x   = np.array(las.x,              dtype=np.float32)
-        y   = np.array(las.y,              dtype=np.float32)
+        x   = np.array(las.x,              dtype=np.float64)   # float32 loses ~0.5 m at UTM northings
+        y   = np.array(las.y,              dtype=np.float64)
         z   = np.array(las.z,              dtype=np.float32)
         cls = np.array(las.classification, dtype=np.int32)
     except Exception as e:
@@ -161,7 +228,7 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         )
 
     try:
-        new_labels, tree_count, peaks, seed_peaks = segment_tree_instances(
+        new_labels, tree_count, peaks, seed_peaks, stats = segment_tree_instances(
             x, y, z, labels_in, cls,
             cell_size=req.cell_size,
             smooth_window=req.smooth_window,
@@ -171,6 +238,10 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
             max_radius=req.max_radius,
             min_tree_points=req.min_tree_points,
             min_crown_cells=req.min_crown_cells,
+            min_peak_height=req.min_peak_height,
+            min_crown_area=req.min_crown_area,
+            return_stats=True,
+            unit_scale=get_session_units(session_id)["scale"],
             dtm_grid=req.dtm_grid,
             dtm_rows=req.dtm_rows,
             dtm_cols=req.dtm_cols,
@@ -187,6 +258,8 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
         tree_count=tree_count,
         peaks=peaks.tolist(),
         seed_peaks=seed_peaks.tolist(),
+        rejected_peaks=stats.pop("rejected_peaks", []),
+        stats=stats,
     )
 
 
@@ -201,8 +274,8 @@ def tree_metrics(session_id: str, patch_id: str, req: TreeMetricsRequest):
 
     try:
         las = laspy.read(str(patch_path))
-        x   = np.array(las.x,              dtype=np.float32)
-        y   = np.array(las.y,              dtype=np.float32)
+        x   = np.array(las.x,              dtype=np.float64)   # float32 loses precision at large coordinates
+        y   = np.array(las.y,              dtype=np.float64)
         z   = np.array(las.z,              dtype=np.float32)
         cls = np.array(las.classification, dtype=np.int32)
     except Exception as e:
@@ -223,6 +296,7 @@ def tree_metrics(session_id: str, patch_id: str, req: TreeMetricsRequest):
             dtm_y_min=req.dtm_y_min,
             dtm_x_range=req.dtm_x_range,
             dtm_y_range=req.dtm_y_range,
+            unit_scale=get_session_units(session_id)["scale"],
         )
     except Exception as e:
         raise HTTPException(500, f"Metrics error: {e}")
@@ -263,7 +337,7 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
     """Run NN inference on a patch and return per-point predicted class labels.
 
     Body (JSON):
-        version      : 'finetune' | 'finetune_int'
+        version      : 'metric' | 'finetune' | 'finetune_int'
         dtm_grid     : flat float array (dtm_rows * dtm_cols) from frontend class-2 ground points
         dtm_rows/cols: grid dimensions
         dtm_x/y_min  : world-space origin
@@ -281,14 +355,16 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
     try:
         cfg = _MODEL_CONFIGS[version]
         las = laspy.read(str(patch_path))
+        mpu = get_session_units(session_id)["scale"]
         labels = predict(
-            np.array(las.x, dtype=np.float32),
-            np.array(las.y, dtype=np.float32),
-            np.array(las.z, dtype=np.float32),
+            np.array(las.x, dtype=np.float64),
+            np.array(las.y, dtype=np.float64),
+            np.array(las.z, dtype=np.float64),
             intensity      = np.array(las.intensity,       dtype=np.float32) if cfg['use_intensity']      else None,
             classification = np.array(las.classification,  dtype=np.float32) if cfg['use_classification'] else None,
             version=version,
-            cache_key=f"{session_id}:{patch_id}:{version}",
+            cache_key=f"{session_id}:{patch_id}:{version}:{mpu}",
+            metres_per_unit=mpu,
             dtm_grid=req.dtm_grid,
             dtm_rows=req.dtm_rows,
             dtm_cols=req.dtm_cols,
@@ -305,10 +381,10 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
 def run_prediction_instances(
     session_id: str, patch_id: str,
     version: str = "v1",
-    bandwidth: float = 2.0,
+    bandwidth: float = 2.5,      # metres
     min_points: int = 100,
     embed_weight: float = 0.3,
-    max_spread: float = 5.0,
+    max_spread: float = 6.0,     # metres
 ):
     """Run 3-head instance segmentation inference on a patch.
 
@@ -326,10 +402,11 @@ def run_prediction_instances(
     try:
         cfg = _MODEL_CONFIGS[version]
         las = laspy.read(str(patch_path))
+        mpu = get_session_units(session_id)["scale"]
         labels = predict_instances(
-            np.array(las.x, dtype=np.float32),
-            np.array(las.y, dtype=np.float32),
-            np.array(las.z, dtype=np.float32),
+            np.array(las.x, dtype=np.float64),
+            np.array(las.y, dtype=np.float64),
+            np.array(las.z, dtype=np.float64),
             intensity      = np.array(las.intensity,      dtype=np.float32) if cfg['use_intensity']      else None,
             classification = np.array(las.classification, dtype=np.float32) if cfg['use_classification'] else None,
             version=version,
@@ -337,13 +414,54 @@ def run_prediction_instances(
             min_points=min_points,
             embed_weight=embed_weight,
             max_spread=max_spread,
-            cache_key=f"{session_id}:{patch_id}:{version}",
+            cache_key=f"{session_id}:{patch_id}:{version}:{mpu}",
+            metres_per_unit=mpu,
         )
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"Instance inference error: {e}")
     n_inst = int(np.unique(labels[labels > 0]).size) if (labels > 0).any() else 0
     return {"labels": labels.tolist(), "n_instances": n_inst}
+
+
+def _patch_record(session_id: str, patch_id: str) -> dict:
+    """Registry entry for this patch (created for patches cut before the registry existed)."""
+    p = dreg.find_patch(session_id, patch_id)
+    if p:
+        return p
+    source = dreg.session_source(session_id)
+    n = lm.get_patch_number(patch_id) or next(
+        (r["patch_number"] for r in reg.list_regions(session_id) if r["patch_id"] == patch_id), 0)
+    if not n:
+        n = dreg.next_patch_number(source, 0)
+    patch_path = get_patch_path(session_id, patch_id)
+    points = laspy.open(str(patch_path)).header.point_count if patch_path.exists() else 0
+    dreg.record_patch(source, n, session_id, patch_id, points)
+    return dreg.find_patch(session_id, patch_id)
+
+
+@router.get("/{session_id}/{patch_id}/export-name")
+def export_name(session_id: str, patch_id: str):
+    """Automatic export name (<city or state>_<tile>_p<n>_t<trees>.las) + where it will go."""
+    labels = lm.get_labels(patch_id)
+    if labels is None:
+        raise HTTPException(404, "Patch label state not found")
+    p = _patch_record(session_id, patch_id)
+    src = dreg.get_source(p["source"]) or {}
+    trees = dreg.count_trees(labels)
+    root, connected = dreg.dataset_root()
+    return {
+        "suggested": dreg.export_name(p["source"], p["patch_number"], trees,
+                                      src.get("city", ""), src.get("state", "")),
+        "trees": trees,
+        "source": p["source"],
+        "patch_number": p["patch_number"],
+        "city": src.get("city", ""),
+        "state": src.get("state", ""),
+        "current_file": p.get("file"),
+        "status": p.get("status"),
+        "labels_folder_connected": connected,
+    }
 
 
 @router.post("/{session_id}/{patch_id}/save", response_model=SaveResponse)
@@ -354,18 +472,52 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
     labels = lm.get_labels(patch_id)
     if labels is None:
         raise HTTPException(404, "Patch label state not found")
+
+    rec = _patch_record(session_id, patch_id)
+    src = dreg.get_source(rec["source"]) or {}
+    trees = dreg.count_trees(labels)
+    name = (req.output_filename or "").strip() or dreg.export_name(
+        rec["source"], rec["patch_number"], trees, src.get("city", ""), src.get("state", ""))
     # Sanitize filename: only allow alphanumerics, dashes, underscores, dots
-    safe_name = re.sub(r"[^\w\-.]", "_", req.output_filename)
+    safe_name = re.sub(r"[^\w\-.]", "_", name)
     if not safe_name.lower().endswith((".las", ".laz")):
         safe_name += ".las"
+
+    units = get_session_units(session_id)
+    saved_to = None
+    root, connected = dreg.dataset_root()
+    if req.to_labels:
+        owner = dreg.file_owner(safe_name)
+        dest = dreg.labels_dir() / safe_name
+        if dest.exists() and owner not in (rec["key"], f"file:{safe_name}"):
+            raise HTTPException(409, f"{safe_name} already exists in the labels folder "
+                                     f"(from {owner or 'another file'}). Choose another name.")
+        if dest.exists() and owner == f"file:{safe_name}":
+            raise HTTPException(409, f"{safe_name} already exists in the labels folder and was not "
+                                     f"written by this patch. Choose another name.")
+
     output_dir = get_session_dir(session_id) / "outputs" / patch_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    for old in output_dir.glob("*.la[sz]"):
+        old.unlink(missing_ok=True)   # keep one current output per patch
     output_path = output_dir / safe_name
-    count = save_labeled_patch(patch_path, output_path, labels)
+    count = save_labeled_patch(patch_path, output_path, labels, units=units)
+    reg.mark_labelled(session_id, patch_id)
+
+    if req.to_labels:
+        import shutil
+        dest = dreg.labels_dir() / safe_name
+        shutil.copyfile(output_path, dest)
+        dreg.record_export(rec["key"], safe_name, trees, units.get("code"))
+        saved_to = str(dest)
+
     return SaveResponse(
         download_url=f"/api/v1/patches/{session_id}/{patch_id}/download",
         output_filename=safe_name,
         point_count=count,
+        trees=trees,
+        saved_to=saved_to,
+        labels_folder_connected=connected,
     )
 
 
@@ -471,8 +623,26 @@ def undo_label(session_id: str, patch_id: str):
         raise HTTPException(404, "Patch label state not found")
     result = lm.undo_last(patch_id)
     if result is None:
-        return UndoResponse(had_operation=False)
-    return UndoResponse(had_operation=True, **result)
+        return UndoResponse(had_operation=False, **lm.history_depth(patch_id))
+    return UndoResponse(had_operation=True, **result, **lm.history_depth(patch_id))
+
+
+@router.post("/{session_id}/{patch_id}/redo", response_model=UndoResponse)
+def redo_label(session_id: str, patch_id: str):
+    """Re-apply the last undone labelling operation on this patch."""
+    if lm.get_labels(patch_id) is None:
+        raise HTTPException(404, "Patch label state not found")
+    result = lm.redo_last(patch_id)
+    if result is None:
+        return UndoResponse(had_operation=False, **lm.history_depth(patch_id))
+    reg.mark_labelled(session_id, patch_id)
+    return UndoResponse(had_operation=True, **result, **lm.history_depth(patch_id))
+
+
+@router.get("/{session_id}/{patch_id}/history")
+def label_history(session_id: str, patch_id: str):
+    """How many steps can be undone / redone (for enabling the buttons)."""
+    return lm.history_depth(patch_id)
 
 @router.post("/{session_id}/{patch_id}/relabel-selection", response_model=RelabelSelectionResponse)
 def relabel_selection(session_id: str, patch_id: str, req: RelabelSelectionRequest):
@@ -484,24 +654,27 @@ def relabel_selection(session_id: str, patch_id: str, req: RelabelSelectionReque
     if not filtered:
         return RelabelSelectionResponse(applied=0, applied_indices=[])
     result = lm.apply_label(patch_id, filtered, req.to_label, protect_classes=False)
+    reg.mark_labelled(session_id, patch_id)
     return RelabelSelectionResponse(applied=result["points_labeled"], applied_indices=filtered)
 
 @router.post("/{session_id}/{patch_id}/restore-from-client")
-async def restore_patch_from_client(session_id: str, patch_id: str, request: Request):
+async def restore_patch_from_client(session_id: str, patch_id: str, request: Request,
+                                    origin_x: float = 0.0, origin_y: float = 0.0):
     """Recreate the patch LAS file using point data sent from the browser.
 
     Used for recovery when the server-side patch file is lost (e.g. after a volume wipe)
     while the in-memory label state is still intact.
 
     Body: raw binary float32 array, 4 values per point: x, y, z, orig_classification.
+    x/y are relative to (origin_x, origin_y) — the origin the /points endpoint returned.
     """
     body = await request.body()
     if not body or len(body) % 16 != 0:
         raise HTTPException(400, "Body must be a multiple of 16 bytes (4 float32 per point)")
 
     data = np.frombuffer(body, dtype=np.float32).reshape(-1, 4)
-    x   = np.array(data[:, 0], dtype=np.float64)
-    y   = np.array(data[:, 1], dtype=np.float64)
+    x   = np.array(data[:, 0], dtype=np.float64) + origin_x
+    y   = np.array(data[:, 1], dtype=np.float64) + origin_y
     z   = np.array(data[:, 2], dtype=np.float64)
     cls = np.array(data[:, 3], dtype=np.int32)
 

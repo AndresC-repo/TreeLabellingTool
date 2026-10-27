@@ -18,7 +18,9 @@
       <div class="progress-bar-track">
         <div class="progress-bar" :style="{ width: progress + '%' }"></div>
       </div>
-      <p class="progress-label">{{ fileIndex + 1 }} / {{ totalFiles }} — {{ progress }}%</p>
+      <p class="progress-label">
+        {{ fileIndex + 1 }} / {{ totalFiles }} — {{ progress >= 100 ? 'Processing on server…' : progress + '%' }}
+      </p>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
   </div>
@@ -29,6 +31,8 @@ import { ref } from 'vue'
 import { uploadFile } from '../../api/client.js'
 import { useSessionStore } from '../../stores/session.js'
 import { useRouter } from 'vue-router'
+import { useToastStore } from '../../stores/toast.js'
+import { checkFiles } from '../../utils/uploadCheck.js'
 
 const dragging = ref(false)
 const uploading = ref(false)
@@ -40,12 +44,12 @@ const error = ref(null)
 const inputRef = ref(null)
 const session = useSessionStore()
 const router = useRouter()
+const toast = useToastStore()
 
 async function onDrop(e) {
   if (uploading.value) return
   dragging.value = false
-  const files = Array.from(e.dataTransfer.files).filter(f => f.name.match(/\.(las|laz)$/i))
-  if (files.length) await uploadAll(files)
+  await uploadAll(Array.from(e.dataTransfer.files))
 }
 
 async function onFileChange(e) {
@@ -55,7 +59,11 @@ async function onFileChange(e) {
   if (files.length) await uploadAll(files)
 }
 
-async function uploadAll(files) {
+async function uploadAll(all) {
+  const { accepted: files, skipped } = checkFiles(all, session.sessions.map(s => s.filename))
+  if (skipped.length) toast.warning(`Skipped ${skipped.join('; ')}`)
+  if (!files.length) return
+
   uploading.value = true
   error.value = null
   totalFiles.value = files.length
@@ -75,7 +83,8 @@ async function uploadAll(files) {
         session.addSession(res.data)
       }
     } catch (err) {
-      errors.push(files[i].name)
+      const detail = err.response?.data?.detail
+      errors.push(detail ? `${files[i].name} (${detail})` : files[i].name)
     }
   }
 

@@ -12,7 +12,7 @@ from services.projection import (
     CLASSIFICATION_COLORS,
     get_classification_color,
 )
-from services.renderer2d import render_top_view
+from services.renderer2d import render_top_view, render_viewport
 from config import DEFAULT_MAX_POINTS
 
 router = APIRouter(prefix="/api/v1/view", tags=["view"])
@@ -83,6 +83,11 @@ def get_2d_image(
     width: int = Query(2048, ge=256, le=4096),
     height: int = Query(2048, ge=256, le=4096),
     point_size: int = Query(1, ge=1, le=8),
+    # Optional viewport (world coords): render only this area at full point density
+    vx_min: float | None = None,
+    vx_max: float | None = None,
+    vy_min: float | None = None,
+    vy_max: float | None = None,
 ):
     las_path = get_las_path(session_id)
     if not las_path.exists():
@@ -90,7 +95,15 @@ def get_2d_image(
     if scalar_field not in VALID_SCALAR_FIELDS:
         raise HTTPException(400, f"scalar_field must be one of {sorted(VALID_SCALAR_FIELDS)}")
 
-    png_bytes, meta = render_top_view(session_id, las_path, scalar_field, width, height, point_size)
+    view = (vx_min, vx_max, vy_min, vy_max)
+    if all(v is not None for v in view):
+        if not (vx_max > vx_min and vy_max > vy_min):
+            raise HTTPException(400, "Viewport must have positive width and height")
+        png_bytes, meta = render_viewport(session_id, las_path, scalar_field, view, width, height, point_size)
+    elif any(v is not None for v in view):
+        raise HTTPException(400, "Pass all four viewport bounds or none")
+    else:
+        png_bytes, meta = render_top_view(session_id, las_path, scalar_field, width, height, point_size)
     b = meta["bounds"]
     return Response(
         content=png_bytes,

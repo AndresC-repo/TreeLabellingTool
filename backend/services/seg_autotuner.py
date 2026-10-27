@@ -67,7 +67,8 @@ def autotune(
             "min_height":      trial.suggest_float("min_height",      0.5,  10.0),
             "min_distance":    trial.suggest_int(  "min_distance",    2,    30),
             "min_tree_points": trial.suggest_int(  "min_tree_points", 50,   2000, log=True),
-            "min_crown_cells": trial.suggest_int(  "min_crown_cells", 10,   200),
+            "min_crown_area":  trial.suggest_float("min_crown_area",  0.0,  40.0),
+            "min_peak_height": trial.suggest_float("min_peak_height", 0.5,  15.0),
             "max_radius":      trial.suggest_float("max_radius",      5.0,  40.0),
         }
 
@@ -113,7 +114,7 @@ def autotune(
             return quality_score(metrics, n_assigned, n_total_tree, x, y, new_labels)
 
     study = optuna.create_study(
-        study_name="tree_seg_global",
+        study_name="tree_seg_global_v2",   # v2: min_crown_area (m²) + min_peak_height
         storage="sqlite:////app/storage/optuna.db",
         load_if_exists=True,
         direction="maximize",
@@ -133,7 +134,8 @@ def autotune(
             "min_height":      round(best.params["min_height"],      2),
             "min_distance":    int(best.params["min_distance"]),
             "min_tree_points": int(best.params["min_tree_points"]),
-            "min_crown_cells": int(best.params["min_crown_cells"]),
+            "min_crown_area":  round(best.params["min_crown_area"],  1),
+            "min_peak_height": round(max(best.params["min_peak_height"], best.params["min_height"]), 2),
             "max_radius":      round(best.params["max_radius"],      1),
         },
         "best_score": round(float(best.value), 4),

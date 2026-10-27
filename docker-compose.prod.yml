@@ -5,11 +5,13 @@ services:
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     volumes:
       - storage_data:/app/storage
+      - ${DATASET_DIR_HOST:-../../urban-tree-detection/data}:/dataset
     expose:
       - "8000"
     restart: unless-stopped
     environment:
       - PYTHONDONTWRITEBYTECODE=1
+      - DATASET_DIR=/dataset
       - CUDA_VISIBLE_DEVICES=
 
   frontend:

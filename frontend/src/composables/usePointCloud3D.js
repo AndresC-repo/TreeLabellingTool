@@ -99,9 +99,21 @@ function _buildGroundTerrain(positions, origCls, count) {
 
   if (groundCount === 0) return null
 
-  const avgGroundZ = groundSum / groundCount
-  for (let i = 0; i < GRID * GRID; i++) {
-    if (!hasCover[i]) terrain[i] = avgGroundZ
+  // Cells without ground (under dense crowns, buildings) take the height of the
+  // NEAREST cell that has ground. The old fill used the patch-wide average ground
+  // height, which puts the terrain at the wrong level wherever the ground slopes.
+  const queue = new Int32Array(GRID * GRID)
+  let head = 0, tail = 0
+  for (let i = 0; i < GRID * GRID; i++) if (hasCover[i]) queue[tail++] = i
+  while (head < tail) {
+    const i = queue[head++], r = (i / GRID) | 0, c = i % GRID
+    const nbrs = [r > 0 ? i - GRID : -1, r < GRID - 1 ? i + GRID : -1, c > 0 ? i - 1 : -1, c < GRID - 1 ? i + 1 : -1]
+    for (const j of nbrs) {
+      if (j < 0 || hasCover[j]) continue
+      hasCover[j] = 1
+      terrain[j] = terrain[i]
+      queue[tail++] = j
+    }
   }
 
   return { terrain, GRID, xMin, yMin, xRange, yRange, BG_COLOR }
@@ -240,7 +252,9 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   let cachedTerrainGrid = null    // result of _buildGroundTerrain — null when no class-2 points
   let inferenceCHMColors = null   // CHM colored only for tree-labeled (101) points
   let _zMin = 0, _zMax = 0       // Z bounds for filter
-  let _xMin = 0, _xMax = 0, _yMin = 0, _yMax = 0  // XY bounds
+  let _xMin = 0, _xMax = 0, _yMin = 0, _yMax = 0  // XY bounds (local, relative to _origin)
+  let _origin = { x: 0, y: 0 }                     // world x/y of local (0, 0)
+  let _units = { code: 'm', scale: 1, source: 'default' }  // linear units of the data
   let _filterLo = -Infinity, _filterHi = Infinity  // current filter bounds
   let _clipBounds = null         // { xLo, xHi, yLo, yHi, zLo, zHi } | null
   let _clipOutIndices = []       // indices outside clip bounds
@@ -251,6 +265,16 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     try {
       const res = await getPatchPoints(sessionId, patchId)
       const { positions, colors, classifications, origClassifications, count } = parse3DBuffer(res.data)
+      // Positions are x/y relative to this world origin (keeps float32 precise at UTM coordinates)
+      _origin = {
+        x: parseFloat(res.headers['x-origin-x'] ?? '0') || 0,
+        y: parseFloat(res.headers['x-origin-y'] ?? '0') || 0,
+      }
+      _units = {
+        code:   res.headers['x-unit-code'] ?? 'm',
+        scale:  parseFloat(res.headers['x-unit-scale'] ?? '1') || 1,
+        source: res.headers['x-unit-source'] ?? 'default',
+      }
       pointCount.value = count
       elevationColors = colors.slice()
 
@@ -273,7 +297,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       cachedPositions = positions
       cachedClassifications = classifications
       origAsprsClassifications = origClassifications
-      setPatchCache(positions, origClassifications)
+      setPatchCache(positions, origClassifications, _origin)
 
       // Compute XYZ bounds from all points
       _zMin = Infinity; _zMax = -Infinity
@@ -309,7 +333,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
         if (Math.round(classifications[i]) === 2) groundIndices.push(i)
       }
 
-      return { center, positions, xMin: _xMin, xMax: _xMax, yMin: _yMin, yMax: _yMax, zMin: _zMin, zMax: _zMax, groundIndices }
+      return { center, positions, origin: _origin, units: _units, xMin: _xMin, xMax: _xMax, yMin: _yMin, yMax: _yMax, zMin: _zMin, zMax: _zMax, groundIndices }
     } finally { loading.value = false }
   }
 
@@ -497,6 +521,8 @@ export function usePointCloud3D(scene, sessionId, patchId) {
 
   // Returns DTM grid data for use in segmentation (passes terrain to backend).
   // Returns null when no class-2 ground points exist.
+  // xMin/yMin are LOCAL (same frame as positions); originX/originY convert to world
+  // coordinates — use dtmWorldParams() in api/client.js when sending to the backend.
   function getDTMGrid() {
     if (!cachedTerrainGrid) return null
     const { terrain, GRID, xMin, yMin, xRange, yRange } = cachedTerrainGrid
@@ -508,8 +534,12 @@ export function usePointCloud3D(scene, sessionId, patchId) {
       yMin,
       xRange,
       yRange,
+      originX: _origin.x,
+      originY: _origin.y,
     }
   }
+
+  function getOrigin() { return _origin }
 
   function dispose() {
     if (pointsMesh) {
@@ -525,5 +555,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
   function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getXYBounds, getPointsMesh, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, getOrigin, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getXYBounds, getPointsMesh, dispose }
 }

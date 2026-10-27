@@ -13,5 +13,9 @@ export default createRouter({
       path: '/session/:id/patch/:patchId',
       component: () => import('../views/PatchView3D.vue'),
     },
+    {
+      path: '/dataset',
+      component: () => import('../views/DatasetView.vue'),
+    },
   ],
 })

@@ -1,6 +1,11 @@
 <template>
   <router-view :key="$route.fullPath" />
+  <ToastHost />
 </template>
+
+<script setup>
+import ToastHost from './components/common/ToastHost.vue'
+</script>
 
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

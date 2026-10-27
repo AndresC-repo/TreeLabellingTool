@@ -20,6 +20,21 @@ export const useView2DStore = defineStore('view2d', () => {
     labeledRegions.value = labeledRegions.value.filter(r => r.patch_id !== patchId)
   }
 
+  /** Replace regions with the list saved on the server (keeps labelled marks made this session) */
+  function setRegions(regions) {
+    labeledRegions.value = regions.map(r => ({
+      patch_id:       r.patch_id,
+      patch_number:   r.patch_number,
+      point_count:    r.point_count,
+      selection_type: r.selection_type,
+      bounds_2d:      r.bounds_2d,
+      polygon_2d:     r.polygon_2d,
+    }))
+    const labelled = new Set(labelledPatchIds.value)
+    for (const r of regions) if (r.labelled) labelled.add(r.patch_id)
+    labelledPatchIds.value = labelled
+  }
+
   function markLabelled(patchId) {
     if (!labelledPatchIds.value.has(patchId)) {
       labelledPatchIds.value = new Set([...labelledPatchIds.value, patchId])
@@ -44,6 +59,7 @@ export const useView2DStore = defineStore('view2d', () => {
     labelledPatchIds,
     addRegion,
     removeRegion,
+    setRegions,
     markLabelled,
     clearActiveSelection,
     reset,
