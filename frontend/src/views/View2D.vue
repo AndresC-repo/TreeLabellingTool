@@ -79,6 +79,7 @@
           title="Load the entire LAS file into the point cloud view"
         >{{ extractingWhole ? 'Loading…' : 'Whole Patch' }}</button>
       </div>
+      <HelpButton page="view2d" />
     </header>
     <div v-if="!ready" class="empty-state">
       <p class="empty-hint">Loading…</p>
@@ -243,6 +244,7 @@ import { checkFiles } from '../utils/uploadCheck.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
 import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
+import HelpButton from '../components/common/HelpButton.vue'
 
 const route  = useRoute()
 const router = useRouter()

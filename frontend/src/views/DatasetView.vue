@@ -19,6 +19,7 @@
           {{ scanning ? 'Scanning…' : '⟳ Rescan labels folder' }}
         </button>
         <a :href="datasetCsvUrl" class="btn" download>⬇ CSV</a>
+        <HelpButton page="dataset" />
       </div>
     </header>
 
@@ -207,6 +208,7 @@ import { useRouter } from 'vue-router'
 import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetPatch, datasetCsvUrl,
          openDatasetPatch, renameDatasetFile } from '../api/client.js'
 import { useToastStore } from '../stores/toast.js'
+import HelpButton from '../components/common/HelpButton.vue'
 
 const toast = useToastStore()
 const router = useRouter()
@@ -440,7 +442,7 @@ h1 { font-size: 1.4rem; color: #adf; font-weight: 600; }
 .folder.off { color: #fb4; }
 .who { font-size: 12px; color: #9ab; padding: 2px 8px; border: 1px solid #334; border-radius: 10px; }
 .who.off { color: #fb4; border-color: #654; }
-.top-actions { margin-left: auto; display: flex; gap: 8px; }
+.top-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 button, .btn {
   background: #2a2a4e; color: #cce; border: 1px solid #445; padding: 6px 12px;
   border-radius: 6px; cursor: pointer; font-size: 13px; text-decoration: none; white-space: nowrap;

@@ -154,8 +154,8 @@ const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor
 const lasso = useLasso3D(camera, renderer)
 
 const inferenceVersions = [
-  { id: 'metric',       label: 'XYZ (m)', desc: 'Metric model — input converted to metres', title: 'Inference — metric model (best_model_m.pth), XYZ in metres' },
-  { id: 'finetune',     label: 'XYZ',   desc: 'Coordinates only',  title: 'Inference — XYZ only [I]' },
+  { id: 'metric',       label: 'XYZ (m)', desc: 'Metric model — input converted to metres', title: 'Inference — metric model (best_model_m.pth), XYZ in metres [I]' },
+  { id: 'finetune',     label: 'XYZ',   desc: 'Coordinates only',  title: 'Inference — XYZ only' },
   { id: 'finetune_int', label: 'XYZ+I', desc: 'XYZ + Intensity',   title: 'Inference — XYZ + Intensity' },
 ]
 

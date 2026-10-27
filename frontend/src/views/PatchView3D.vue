@@ -11,6 +11,7 @@
       </template>
       <span class="patch-label">patch_{{ store.patchNumber }}</span>
       <span class="point-count" v-if="store.pointCount > 0">{{ store.pointCount.toLocaleString() }} points</span>
+      <span class="help-slot" :class="{ 'push-right': !(store.pointCount > 0) }"><HelpButton page="patch3d" /></span>
     </header>
     <div class="main">
       <CanvasRenderer3D ref="renderer3d" class="canvas" />
@@ -45,6 +46,7 @@ import PatchLegend from '../components/patch3d/PatchLegend.vue'
 import InferenceLegend from '../components/patch3d/InferenceLegend.vue'
 import SavePanel from '../components/patch3d/SavePanel.vue'
 import ClipPanel from '../components/patch3d/ClipPanel.vue'
+import HelpButton from '../components/common/HelpButton.vue'
 
 const route = useRoute()
 const store = usePatch3DStore()
@@ -126,7 +128,7 @@ function onKeyDown(e) {
       break
     case 'i':
     case 'I':
-      renderer3d.value?.runPrediction('v1')
+      renderer3d.value?.runPrediction(store.inferenceVersion || 'metric')   // last used model
       break
     case 'Enter':
     case ' ':
@@ -160,6 +162,8 @@ onBeforeUnmount(() => {
 a { color: #7af; text-decoration: none; font-size: 14px; }
 .patch-label { font-weight: bold; color: #eee; font-family: monospace; }
 .point-count { font-size: 13px; color: #88a; margin-left: auto; }
+.push-right { margin-left: auto; }
+.help-slot { display: inline-flex; }
 .main { display: flex; flex: 1; overflow: hidden; }
 .canvas { flex: 1; }
 .side-panel { width: 260px; background: #0d0d1f; border-left: 1px solid #334; padding: 16px; display: flex; flex-direction: column; gap: 24px; overflow-y: auto; }

@@ -1,5 +1,6 @@
 <template>
   <div class="upload-page">
+    <div class="help-corner"><HelpButton page="upload" /></div>
     <div class="header">
       <h1>Point Cloud Labeling Tool</h1>
       <p class="subtitle">Upload a <code>.las</code> or <code>.laz</code> file to begin labeling</p>
@@ -27,6 +28,7 @@
 import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import DropZone from '../components/upload/DropZone.vue'
+import HelpButton from '../components/common/HelpButton.vue'
 import { useSessionStore } from '../stores/session.js'
 import { useToastStore } from '../stores/toast.js'
 
@@ -46,6 +48,7 @@ function open(entry) {
 </script>
 
 <style scoped>
+.help-corner { position: fixed; top: 14px; right: 16px; z-index: 50; }
 .upload-page {
   display: flex;
   flex-direction: column;

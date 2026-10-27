@@ -25,7 +25,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const segmenting        = ref(false)
   const isWholePatch      = ref(false)
   const hasPrediction     = ref(false)
-  const inferenceVersion  = ref('v1')   // 'v1' | 'v2'
+  const inferenceVersion  = ref('metric')   // model id, see inferenceVersions in CanvasRenderer3D
   // [{ label: number, name: string, color: string, count: number }]
   const predictionLegend = ref([])
   // Raw per-point label array from last inference (Int32Array or plain array)
@@ -104,7 +104,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     segmenting.value = false
     isWholePatch.value = false
     hasPrediction.value = false
-    inferenceVersion.value = 'v1'
+    inferenceVersion.value = 'metric'
     predictionLegend.value  = []
     inferenceLabels.value   = null
     semanticLabels.value    = null
