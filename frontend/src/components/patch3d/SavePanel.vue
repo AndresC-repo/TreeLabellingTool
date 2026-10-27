@@ -2,7 +2,7 @@
   <div class="save-panel">
     <h3>Save</h3>
 
-    <label class="field">
+    <label v-if="!info.custom_name" class="field">
       <span>City</span>
       <input
         v-model="city"
@@ -17,7 +17,7 @@
       <button v-if="customName" class="auto-btn" @click="useAutoName" title="Back to the automatic name">↺</button>
     </div>
     <p class="name-hint">
-      {{ info.trees }} tree{{ info.trees === 1 ? '' : 's' }} · patch {{ info.patch_number ?? '–' }}
+      {{ info.trees }} tree{{ info.trees === 1 ? '' : 's' }}<template v-if="info.patch_number"> · patch {{ info.patch_number }}</template>
       <span v-if="info.current_file && info.current_file !== filename" class="dim">
         · replaces {{ info.current_file }}
       </span>

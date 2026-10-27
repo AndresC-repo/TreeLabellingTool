@@ -1,26 +1,35 @@
-version: "3.9"
+# Labelling setup: built frontend served by nginx, no hot reload.
+#   docker compose -f docker-compose.prod.yml up -d --build   → http://localhost:8080
 services:
   backend:
     build: ./backend
+    # x86-64 image; emulated on Apple Silicon Macs (see docker-compose.yml)
+    platform: linux/amd64
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     volumes:
       - storage_data:/app/storage
-      - ${DATASET_DIR_HOST:-../../urban-tree-detection/data}:/dataset
+      - hf_cache:/root/.cache/huggingface
+      - ${DATASET_DIR_HOST:-./data}:/dataset
     expose:
       - "8000"
     restart: unless-stopped
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - DATASET_DIR=/dataset
+      - LABELLER=${LABELLER:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
+      - DEFAULT_MAX_POINTS=${DEFAULT_MAX_POINTS:-500000}
       - CUDA_VISIBLE_DEVICES=
 
   frontend:
     build: ./frontend
     ports:
-      - "80:80"
+      - "${PORT:-8080}:80"
     depends_on:
       - backend
     restart: unless-stopped
 
 volumes:
   storage_data:
+  hf_cache:

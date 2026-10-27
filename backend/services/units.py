@@ -81,12 +81,27 @@ def _from_wkt(header) -> str | None:
     return None
 
 
+def _from_tool_vlr(header) -> str | None:
+    """Units stored by this tool's export (LabellingTool VLR, JSON with "units")."""
+    for vlr in _all_vlrs(header):
+        if getattr(vlr, "user_id", "") == "LabellingTool" and getattr(vlr, "record_id", None) == 1:
+            try:
+                code = json.loads(bytes(vlr.record_data).decode("utf-8")).get("units")
+            except Exception:
+                return None
+            return code if code in UNITS else None
+    return None
+
+
 def detect_units(las_path, x_min: float | None = None) -> dict:
     with laspy.open(las_path) as f:
         header = f.header
         code = _from_geokeys(header) or _from_wkt(header)
         if code:
             return {"code": code, "source": "crs"}
+        code = _from_tool_vlr(header)
+        if code:
+            return {"code": code, "source": "export"}
         if x_min is None:
             x_min = float(header.mins[0])
         extent = (float(header.maxs[0] - header.mins[0]), float(header.maxs[1] - header.mins[1]))

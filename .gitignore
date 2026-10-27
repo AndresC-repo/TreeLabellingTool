@@ -1,3 +1,21 @@
+# Personal settings (each person copies .env.example to .env)
+.env
+
+# Labelled data in the default data folder (DATASET_DIR_HOST=./data)
+/data/
+
+# Runtime files
+backend/storage/*
+!backend/storage/.gitkeep
+__pycache__/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Large local files
 *.pdf
 Screenshot_inference.png
-.env.example

@@ -1,7 +1,14 @@
 <template>
   <div class="patch-layout">
     <header class="toolbar">
-      <router-link :to="`/session/${$route.params.id}/view`">← Back to 2D View</router-link>
+      <template v-if="$route.query.from === 'dataset'">
+        <router-link to="/dataset" class="nav-main" title="Back to the dataset overview (filters are kept)">← Dataset</router-link>
+        <router-link :to="`/session/${$route.params.id}/view`" class="nav-sub">2D view</router-link>
+      </template>
+      <template v-else>
+        <router-link :to="`/session/${$route.params.id}/view`">← Back to 2D View</router-link>
+        <router-link to="/dataset" class="nav-sub" title="Dataset overview">📊 Dataset</router-link>
+      </template>
       <span class="patch-label">patch_{{ store.patchNumber }}</span>
       <span class="point-count" v-if="store.pointCount > 0">{{ store.pointCount.toLocaleString() }} points</span>
     </header>
@@ -147,6 +154,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .patch-layout { display: flex; flex-direction: column; height: 100vh; }
+.nav-sub { font-size: 12px; color: #8ab; opacity: 0.85; }
+.nav-sub:hover { opacity: 1; }
 .toolbar { display: flex; align-items: center; gap: 16px; padding: 8px 16px; background: #0d0d1f; border-bottom: 1px solid #334; flex-shrink: 0; }
 a { color: #7af; text-decoration: none; font-size: 14px; }
 .patch-label { font-weight: bold; color: #eee; font-family: monospace; }

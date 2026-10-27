@@ -78,6 +78,8 @@ export const getDataset = () => api.get('/dataset')
 export const scanLabelsFolder = () => api.post('/dataset/scan')
 export const updateDatasetSource = (name, fields) => api.patch('/dataset/sources', { name, fields })
 export const updateDatasetPatch = (key, fields) => api.patch('/dataset/patches', { key, fields })
+export const openDatasetPatch = (key) => api.post('/dataset/open', { key })
+export const renameDatasetFile = (key, newName) => api.post('/dataset/rename', { key, new_name: newName })
 export const datasetCsvUrl = '/api/v1/dataset/patches.csv'
 
 export const getDownloadUrl = (sessionId, patchId) =>

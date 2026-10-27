@@ -1,18 +1,28 @@
+# Development stack: hot-reload backend + Vite frontend.
+#   docker compose up --build        → http://localhost:5173
+# For labelling (no code changes) use docker-compose.prod.yml instead, see README.
 services:
   backend:
     build: ./backend
+    # The backend image is x86-64 only (PyTorch CPU + spconv wheels). On Apple Silicon
+    # Macs Docker Desktop runs it through emulation (Rosetta); elsewhere this is a no-op.
+    platform: linux/amd64
     volumes:
       - ./backend:/app
       - storage_data:/app/storage
-      # Training data folder of the NN repo: exports go to <it>/labels and the dataset
-      # registry (labelling_registry.json) is stored next to them. Override with
-      # DATASET_DIR_HOST in .env if the repo lives elsewhere.
-      - ${DATASET_DIR_HOST:-../../urban-tree-detection/data}:/dataset
+      - hf_cache:/root/.cache/huggingface      # downloaded models survive rebuilds
+      # Labelled patches go to <this folder>/labels, next to labelling_registry.json.
+      # Set DATASET_DIR_HOST in .env (default: ./data inside this repo).
+      - ${DATASET_DIR_HOST:-./data}:/dataset
     ports:
       - "8000:8000"
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - DATASET_DIR=/dataset
+      - LABELLER=${LABELLER:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
+      - DEFAULT_MAX_POINTS=${DEFAULT_MAX_POINTS:-500000}
       # Tell PyTorch/spconv there are zero CUDA devices.
       # spconv-cu118 selects ConvAlgo.MaskImplicitGemm (GPU-only) by default;
       # with no visible CUDA device it falls back to ConvAlgo.Native (CPU).
@@ -35,3 +45,4 @@ services:
 
 volumes:
   storage_data:
+  hf_cache:

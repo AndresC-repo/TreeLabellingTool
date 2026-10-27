@@ -10,6 +10,10 @@
       >
         {{ data ? (data.labels_folder.connected ? '● data/labels connected' : '● labels folder not connected') : '' }}
       </span>
+      <span v-if="data" class="who" :class="{ off: !data.labeller }"
+            :title="data.labeller ? 'Added to the names of files you save (LABELLER in .env)' : 'Set LABELLER=<your initials> in .env and restart, so your file names are marked as yours'">
+        {{ data.labeller ? `labelling as ${data.labeller}` : 'no labeller name set' }}
+      </span>
       <div class="top-actions">
         <button @click="rescan" :disabled="scanning" title="Pick up files in data/labels that weren't saved by the tool, refresh tree counts">
           {{ scanning ? 'Scanning…' : '⟳ Rescan labels folder' }}
@@ -93,6 +97,7 @@
             <tr>
               <th @click="sortBy('file')">File</th>
               <th @click="sortBy('region')">Region</th>
+              <th @click="sortBy('labeller')" title="Who labelled it (editable)">By</th>
               <th @click="sortBy('trees')" class="num">Trees</th>
               <th @click="sortBy('points')" class="num">Points</th>
               <th @click="sortBy('status')">Status</th>
@@ -102,16 +107,29 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="p in sortedPatches" :key="p.key" :class="{ excluded: p.status === 'excluded' }">
+            <tr v-for="p in sortedPatches" :key="p.key"
+                :class="{ excluded: p.status === 'excluded', canopen: canOpen(p), busy: opening === p.key, 'last-opened': p.key === lastOpened }"
+                :title="canOpen(p) ? 'Double-click to open in the 3D view' : ''"
+                @dblclick="onRowDblClick($event, p)">
               <td class="file">
-                <div class="fname" :title="p.file || '(not saved yet)'">
+                <div v-if="renaming === p.key" class="rename">
+                  <input v-model="renameText" class="rename-input" @keydown.enter.prevent="commitRename(p)"
+                         @keydown.esc.prevent="renaming = null" @blur="commitRename(p)" @vue:mounted="focusEl" />
+                  <span class="ext">{{ extOf(p.file) }}</span>
+                </div>
+                <div v-else class="fname" :title="p.file || '(not saved yet)'">
                   {{ p.file || '— not saved yet' }}
+                  <button v-if="p.file && !p.file_missing" class="pen" title="Rename the file in data/labels" @click.stop="startRename(p)">✎</button>
                   <span v-if="p.file_missing" class="badge miss" title="The file is no longer in data/labels">missing</span>
                   <span v-if="p.origin === 'folder'" class="badge" title="Found in data/labels, not saved by this tool version">folder</span>
                 </div>
                 <div v-if="p.source" class="sub">{{ p.source }} · patch {{ p.patch_number }}</div>
               </td>
               <td>{{ regionOf(p) || '—' }}</td>
+              <td>
+                <input class="short" :value="p.labeller" placeholder="—" maxlength="16"
+                       @change="setPatch(p, { labeller: $event.target.value.trim() })" @keydown.enter="$event.target.blur()" />
+              </td>
               <td class="num" :class="{ zero: p.trees === 0 }">{{ p.trees >= 0 ? p.trees : '?' }}</td>
               <td class="num">{{ p.points ? p.points.toLocaleString() : '' }}</td>
               <td>
@@ -125,10 +143,13 @@
               </td>
               <td class="date">{{ fmtDate(p.exported_at) }}</td>
               <td>
-                <router-link v-if="p.openable" :to="`/session/${p.session_id}/patch/${p.patch_id}?n=${p.patch_number}`" class="open" title="Open this patch in the 3D view">Open</router-link>
+                <button v-if="canOpen(p)" class="open" :disabled="!!opening" @click="openRow(p)"
+                        :title="p.openable ? 'Open this patch in the 3D view' : 'Load the saved file into the tool and open it in the 3D view'">
+                  {{ opening === p.key ? 'Opening…' : 'Open' }}
+                </button>
               </td>
             </tr>
-            <tr v-if="!sortedPatches.length"><td colspan="8" class="empty">No patches match.</td></tr>
+            <tr v-if="!sortedPatches.length"><td colspan="9" class="empty">No patches match.</td></tr>
           </tbody>
         </table>
       </div>
@@ -181,17 +202,45 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
-import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetPatch, datasetCsvUrl } from '../api/client.js'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetPatch, datasetCsvUrl,
+         openDatasetPatch, renameDatasetFile } from '../api/client.js'
 import { useToastStore } from '../stores/toast.js'
 
 const toast = useToastStore()
+const router = useRouter()
 const data = ref(null)
 const loadError = ref(null)
 const scanning = ref(false)
 const tab = ref('patches')
 const filters = reactive({ q: '', region: '', status: '', tileStatus: '' })
 const sort = reactive({ key: 'file', dir: 1 })
+
+// The page remembers tab, filters, sort, scroll and the last opened row for this browser
+// tab, so coming back from the 3D view lands where you left.
+const STATE_KEY = 'datasetView'
+const lastOpened = ref(null)
+function remember() {
+  try {
+    sessionStorage.setItem(STATE_KEY, JSON.stringify({
+      tab: tab.value, filters: { ...filters }, sort: { ...sort },
+      scrollY: window.scrollY, lastOpened: lastOpened.value,
+    }))
+  } catch { /* storage unavailable: just don't remember */ }
+}
+let savedScroll = 0
+try {
+  const st = JSON.parse(sessionStorage.getItem(STATE_KEY) || 'null')
+  if (st) {
+    if (st.tab) tab.value = st.tab
+    Object.assign(filters, st.filters || {})
+    Object.assign(sort, st.sort || {})
+    lastOpened.value = st.lastOpened || null
+    savedScroll = st.scrollY || 0
+  }
+} catch { /* ignore */ }
+watch([tab, filters, sort, lastOpened], remember, { deep: true })
 
 async function load() {
   loadError.value = null
@@ -217,6 +266,13 @@ async function rescan() {
 
 onMounted(async () => {
   await load()
+  await nextTick()
+  const row = lastOpened.value && document.querySelector('tr.last-opened')
+  if (savedScroll) window.scrollTo(0, savedScroll)
+  if (row) {   // the row may have moved (renamed, re-sorted): make sure it is visible
+    const r = row.getBoundingClientRect()
+    if (r.top < 0 || r.bottom > window.innerHeight) row.scrollIntoView({ block: 'center' })
+  }
   // First visit: nothing scanned yet → scan the folder once automatically
   if (data.value && !data.value.last_scan) rescan()
 })
@@ -241,6 +297,50 @@ async function setSource(s, fields) {
   } catch (err) {
     Object.assign(s, before)
     toast.error('Not saved: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+// ── open in 3D (double-click a row) ──
+const opening = ref(null)
+const canOpen = p => p.openable || (p.file && !p.file_missing)
+function onRowDblClick(e, p) {
+  if (e.target.closest('input, select, button, a, .rename')) return
+  if (canOpen(p)) openRow(p)
+}
+async function openRow(p) {
+  if (opening.value) return
+  opening.value = p.key
+  try {
+    const r = (await openDatasetPatch(p.key)).data
+    lastOpened.value = p.key
+    remember()
+    router.push(`/session/${r.session_id}/patch/${r.patch_id}?n=${r.patch_number}&from=dataset`)
+  } catch (err) {
+    toast.error('Could not open: ' + (err.response?.data?.detail || err.message))
+    opening.value = null
+  }
+}
+
+// ── rename the file in data/labels ──
+const renaming = ref(null)
+const renameText = ref('')
+const extOf = f => (f || '').match(/\.la[sz]$/i)?.[0] || '.las'
+const focusEl = vnode => { vnode.el.focus(); vnode.el.select() }
+function startRename(p) {
+  renaming.value = p.key
+  renameText.value = p.file.replace(/\.la[sz]$/i, '')
+}
+async function commitRename(p) {
+  if (renaming.value !== p.key) return
+  renaming.value = null
+  const name = renameText.value.trim()
+  if (!name || name + extOf(p.file) === p.file) return
+  try {
+    const r = (await renameDatasetFile(p.key, name + extOf(p.file))).data
+    toast.success(`Renamed to ${r.file}`)
+    await load()
+  } catch (err) {
+    toast.error('Not renamed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
@@ -288,7 +388,7 @@ const matchQ = (...xs) => !filters.q || xs.some(x => (x || '').toLowerCase().inc
 const filteredPatches = computed(() => (data.value?.patches ?? []).filter(p =>
   (!filters.region || regionKey(p) === filters.region) &&
   (!filters.status || p.status === filters.status) &&
-  matchQ(p.file, p.source, p.notes)))
+  matchQ(p.file, p.source, p.notes, p.labeller)))
 
 const sortedPatches = computed(() => {
   const key = sort.key, dir = sort.dir
@@ -319,6 +419,18 @@ function fmtDate(t) {
 </script>
 
 <style scoped>
+tr.canopen { cursor: pointer; }
+tr.last-opened td { background: rgba(90, 160, 255, 0.10); }
+tr.last-opened td:first-child { box-shadow: inset 3px 0 0 #5af; }
+tr.busy td { opacity: 0.6; }
+.fname .pen { visibility: hidden; margin-left: 4px; padding: 0 5px; font-size: 12px; line-height: 18px;
+              background: none; border: 1px solid transparent; color: #8ab; cursor: pointer; }
+tr:hover .fname .pen { visibility: visible; }
+.fname .pen:hover { border-color: #456; color: #cdf; }
+.rename { display: flex; align-items: center; gap: 2px; }
+.rename-input { width: 100%; min-width: 220px; font-size: 12px; padding: 3px 6px; background: #0d1622;
+                color: #def; border: 1px solid #5af; border-radius: 3px; }
+.rename .ext { font-size: 12px; color: #789; }
 .dataset-page { min-height: 100vh; padding: 18px 24px 40px; color: #cce; }
 .top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
 .back { color: #7af; text-decoration: none; font-size: 13px; }
@@ -326,6 +438,8 @@ function fmtDate(t) {
 h1 { font-size: 1.4rem; color: #adf; font-weight: 600; }
 .folder { font-size: 12px; color: #7c9; }
 .folder.off { color: #fb4; }
+.who { font-size: 12px; color: #9ab; padding: 2px 8px; border: 1px solid #334; border-radius: 10px; }
+.who.off { color: #fb4; border-color: #654; }
 .top-actions { margin-left: auto; display: flex; gap: 8px; }
 button, .btn {
   background: #2a2a4e; color: #cce; border: 1px solid #445; padding: 6px 12px;
@@ -399,7 +513,7 @@ input.notes { width: 100%; min-width: 160px; }
 input.short { width: 50px; }
 input.mid { width: 120px; }
 .date { color: #889; white-space: nowrap; font-size: 12px; }
-.open { color: #7af; font-size: 12px; text-decoration: none; }
+.open { color: #7af; font-size: 12px; text-decoration: none; background: none; border: 1px solid #345; padding: 2px 8px; }
 .open:hover { text-decoration: underline; }
 .empty { color: #778; font-size: 12px; text-align: center; padding: 18px; }
 .foot { margin-top: 10px; font-size: 11px; color: #667; }

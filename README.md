@@ -1,85 +1,118 @@
 # Tree Labelling Tool
 
-A web-based point cloud labelling tool for `.las` and `.laz` files. Upload a file, select regions in a 2D top-down view, inspect them in a 3D viewer, run neural-network tree detection, segment individual crowns, assign labels, and download the result as a new `.las` file.
+A web-based point cloud labelling tool for `.las` and `.laz` files. Upload a USGS tile, cut patches in a 2D top-down view, label individual trees in a 3D viewer (with NN inference and crown segmentation to help), and save the labelled patches as training data. A dataset overview page keeps track of what has been labelled.
+
+---
+
+## Quick start (for labellers)
+
+You only need **Docker Desktop** and **git**. Works on Windows, macOS and Linux.
+
+**1. Install**
+- Docker Desktop: https://www.docker.com/products/docker-desktop/ — start it once and leave it running.
+  On Windows, accept the WSL 2 setup if it asks.
+- git: https://git-scm.com/downloads (macOS: run `git --version` in Terminal and accept the install).
+
+Your computer needs about **10 GB free disk space** and **8 GB RAM** (16 GB recommended).
+
+**2. Download the tool** (in a terminal: PowerShell on Windows, Terminal on macOS)
+
+```bash
+git clone https://github.com/AndresC-repo/TreeLabellingTool.git
+cd TreeLabellingTool
+```
+
+**3. Personal settings** — copy the template and put your initials in it:
+
+```bash
+cp .env.example .env          # Windows PowerShell: copy .env.example .env
+```
+
+Open `.env` in any text editor and set `LABELLER=` to your initials (e.g. `LABELLER=MK`).
+They are added to every file you save, so labels from different people never clash.
+
+**4. Start**
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+The first start downloads and builds everything (10–20 minutes). Later starts take seconds.
+Then open **http://localhost:8080** in your browser.
+
+**5. Your labels** are saved in the `data/labels` folder inside the tool folder
+(set `DATASET_DIR_HOST` in `.env` to use another folder). The **📊 Dataset** page lists everything you
+labelled; `data/labelling_registry.json` holds that list. Send the `data` folder (or the `.las` files in
+`data/labels`) to whoever collects the training data.
+
+**Everyday commands** (run in the tool folder)
+
+| What | Command |
+|---|---|
+| Stop the tool | `docker compose -f docker-compose.prod.yml down` |
+| Start it again | `docker compose -f docker-compose.prod.yml up -d` |
+| Update to the newest version | `git pull` then `docker compose -f docker-compose.prod.yml up -d --build` |
+| See errors | `docker compose -f docker-compose.prod.yml logs -f backend` |
+
+**Notes**
+- **Apple Silicon Macs (M1–M4):** the backend runs through Docker's Intel emulation. Everything works,
+  but NN inference is slower. In Docker Desktop → Settings → General, keep
+  "Use Rosetta for x86_64/amd64 emulation" switched on.
+- **Port 8080 already in use?** Set `PORT=8090` (or any free port) in `.env` and open that port instead.
+- The NN models are downloaded from Hugging Face the first time you run inference (internet needed once).
+  If the model repository is private, put a read token in `.env` as `HF_TOKEN=…`.
+- `docker compose ... down` keeps your uploaded files; your saved labels are in `data/labels` and are never
+  touched by Docker commands.
 
 ---
 
 ## Features
 
-- **File upload** — drag-and-drop or browse for `.las` / `.laz` files up to 2 GB
-- **2D top-down view** — orthographic Z-projection with scalar field switching (elevation, classification, intensity, number of returns)
-- **Three selection tools**
-  - Rectangle drag
-  - Freehand polygon (click to add points, right-click to close)
-  - Fixed rectangle (draw once, drag to reposition)
-- **Whole-patch mode** — load the entire LAS file into the 3D viewer without drawing a selection
-- **3D patch viewer** — perspective view with OrbitControls (orbit, pan, zoom); point-size controls; elevation filter slider; keyboard shortcuts
-- **View modes** — cycle between elevation, classification, DTM, CHM, prediction, and inference-CHM colour schemes (`V` key)
-- **Screen-space lasso** — draw a freehand lasso over the 3D view; point-in-polygon is computed off the main thread via a Web Worker
-- **Label assignment** — incrementing labels starting at 101; apply to selected points, auto-advances to next label; protect ground/building classes (ASPRS 2/6)
-- **Replace label in selection** — within a lasso selection replace only points with label X → Y, leaving all other labels untouched
-- **NN inference** — run a SegmentAnyTree model (4 variants) to classify points as tree / non-tree; results shown in a prediction colour scheme
-- **Tree instance segmentation** — CHM-based crown delineation (Duncanson 2014 watershed algorithm) with tunable parameters
-- **Auto-tune segmentation** — Optuna hyperparameter search; geometric quality score (geometric mode) or Adjusted Rand Index against user-corrected examples (supervised mode)
-- **Supervised training examples** — save a corrected patch segmentation as ground truth; subsequent auto-tune runs use mean ARI across all saved examples
-- **Export** — save the labelled patch as a `.las` file and download it; auto-generated filename encodes label IDs and tree count
+- **File upload** — drag-and-drop or browse for `.las` / `.laz` files up to 2 GB; units (metres / US feet) detected from the CRS, with a warning when they can only be guessed
+- **2D top-down view** — scalar fields (elevation, classification, intensity, returns); cut patches with rectangle, polygon or fixed-size rectangle; patches stay outlined and numbered
+- **3D patch viewer** — orbit/pan/zoom, point size, elevation filter, clipping, keyboard shortcuts
+- **Labelling** — screen-space lasso, tree IDs from 101 upwards, protect ground/building, replace a label inside a selection; **undo/redo up to 200 steps**
+- **NN inference** — SegmentAnyTree models (tree / non-tree), downloaded from Hugging Face
+- **Tree instance segmentation** — CHM watershed (min height, min peak height) with Optuna auto-tune
+- **Save** — writes `<City>_<tile>_p<n>_<labeller>_t<trees>.las` straight into the training labels folder; real ASPRS classes + exact labels in a `label` field + units marker
+- **Dataset overview** — all patches and source tiles with tree counts, regions, status and notes; double-click to reopen a patch, rename files, CSV export
 
 ---
 
-## Tech Stack
+## Development
 
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.9, FastAPI, laspy, NumPy, SciPy, scikit-image |
-| Inference | PyTorch (CPU), MinkowskiEngine, HuggingFace Hub |
-| Segmentation | scikit-image watershed, Optuna, scikit-learn (ARI) |
-| Frontend | Vue 3, Three.js, Pinia, Vue Router 4, Axios |
-| Containerisation | Docker, docker-compose, Nginx |
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-
-### Development
-
-Hot-reload on both backend and frontend:
+Hot reload for backend and frontend:
 
 ```bash
-make dev
+docker compose up --build        # or: make dev-build
 ```
 
 - Frontend: http://localhost:5173
-- Backend API: http://localhost:8000
-
-### Production
-
-Optimised build served via Nginx on port 80:
-
-```bash
-make prod
-```
-
-- App: http://localhost
-
----
-
-## Makefile Commands
+- Backend API: http://localhost:8000 (docs at /docs)
 
 | Command | Description |
 |---|---|
-| `make dev` | Start dev stack (hot-reload backend + Vite frontend) |
-| `make dev-build` | Rebuild images, then start dev stack |
-| `make prod` | Start prod stack (Nginx-served frontend, no `--reload`) |
-| `make prod-build` | Rebuild images, then start prod stack |
-| `make logs` | Tail logs from all containers |
-| `make logs-backend` | Tail backend logs only |
-| `make logs-frontend` | Tail frontend logs only |
-| `make down` | Stop containers (uploaded files are preserved) |
-| `make clean` | Stop containers and delete all uploaded files |
+| `make dev` / `make dev-build` | Dev stack (hot reload), optionally rebuilding images |
+| `make prod` / `make prod-build` | Labelling stack on http://localhost:8080 |
+| `make logs`, `make logs-backend`, `make logs-frontend` | Tail logs |
+| `make down` | Stop containers (uploaded files are kept) |
+| `make clean` | Stop containers and delete uploaded files and cached models |
+
+---
+
+## Configuration (`.env`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `LABELLER` | *(empty)* | Your initials; added to saved file names and shown on the dataset page |
+| `DATASET_DIR_HOST` | `./data` | Folder on your computer for `labels/` and `labelling_registry.json` |
+| `PORT` | `8080` | Port of the labelling stack |
+| `HF_TOKEN` | *(empty)* | Hugging Face token, only if the model repository is private |
+| `MAX_UPLOAD_BYTES` | `2147483648` | Upload limit (2 GB) |
+| `DEFAULT_MAX_POINTS` | `500000` | Points drawn in the 2D view |
+
+Uploaded files and patches live in a Docker volume (`storage_data`) and are removed after 24 h without use.
+Downloaded models are cached in the `hf_cache` volume.
 
 ---
 
@@ -92,6 +125,7 @@ make prod
 │   ├── config.py                  # Storage paths, size limits
 │   ├── routers/
 │   │   ├── files.py               # Upload and session info endpoints
+│   │   ├── dataset.py             # Dataset overview: list, scan, edit, open, rename, CSV
 │   │   ├── view.py                # 2D binary buffer and colormap endpoints
 │   │   └── patches.py             # Extract, label, relabel, save, predict, segment, auto-tune, training
 │   ├── models/
@@ -102,11 +136,12 @@ make prod
 │   │   ├── projection.py          # Scalar field → RGB colour mapping
 │   │   ├── renderer2d.py          # Server-side 2D image rendering
 │   │   ├── patch_extractor.py     # Polygon PIP extraction, patch writing
-│   │   ├── label_manager.py       # In-memory label state per patch
+│   │   ├── label_manager.py       # In-memory label state per patch (undo/redo)
+│   │   ├── dataset_registry.py    # labelling_registry.json: tiles, patches, statuses
 │   │   ├── las_writer.py          # Write labelled patch to .las
 │   │   ├── point_cache.py         # LRU cache for loaded point arrays
-│   │   ├── predictor.py           # SegmentAnyTree NN inference (v1–v4)
-│   │   ├── segment_any_tree.py    # MinkowskiEngine model definition
+│   │   ├── predictor.py           # SegmentAnyTree NN inference (5 model variants)
+│   │   ├── segment_any_tree.py    # spconv model definition
 │   │   ├── tree_segmentor.py      # CHM watershed crown delineation
 │   │   ├── tree_metrics.py        # Per-tree height / crown metrics
 │   │   ├── seg_quality.py         # Geometric quality score for auto-tune
@@ -120,6 +155,7 @@ make prod
 │   │   ├── views/
 │   │   │   ├── UploadView.vue         # File upload page
 │   │   │   ├── View2D.vue             # 2D top-down viewer
+│   │   │   ├── DatasetView.vue        # Dataset overview page
 │   │   │   └── PatchView3D.vue        # 3D viewer orchestration + keyboard shortcuts
 │   │   ├── components/
 │   │   │   ├── upload/DropZone.vue
@@ -150,8 +186,9 @@ make prod
 │   ├── nginx.conf
 │   └── Dockerfile
 │
-├── docker-compose.yml             # Development stack
-├── docker-compose.prod.yml        # Production stack
+├── docker-compose.yml             # Development stack (hot reload)
+├── docker-compose.prod.yml        # Labelling stack (nginx, port 8080)
+├── .env.example                   # Personal settings template → copy to .env
 └── Makefile
 ```
 
@@ -184,38 +221,25 @@ make prod
 | `R` | Toggle auto-rotate |
 | `S` | Side view |
 | `T` | Top view |
-| `V` | Cycle view mode (elevation / DTM / CHM or prediction / DTM / inference-CHM) |
+| `V` | Cycle view mode |
 | `L` | Classification view |
-| `I` | Run inference (v1) |
+| `I` | Run inference |
 | `Enter` / `Space` | Apply current label to selection |
 | `G` | Apply ground label to selection |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
 | `Ctrl+S` | Save patch |
 
 ---
 
 ## Inference Models
 
-Models are downloaded automatically from HuggingFace (`AndCarr/UrbanTreeDetector`) on first use.
+Downloaded automatically from Hugging Face (`AndCarr/UrbanTreeDetector`) on first use.
 
-| Version | Input features | Model file |
+| Model | Input | File |
 |---|---|---|
-| v1 | XYZ | `best_model.pth` |
-| v2 | XYZ + Classification | `best_model_cls.pth` |
-| v3 | XYZ + Intensity | `best_model_int.pth` |
-| v4 | XYZ + Intensity + Classification | `best_model_int_cls.pth` |
-
----
-
-## Configuration
-
-Key constants in `backend/config.py`:
-
-| Constant | Default | Description |
-|---|---|---|
-| `MAX_UPLOAD_BYTES` | 2 GB | Maximum upload file size |
-| `DEFAULT_MAX_POINTS` | 500 000 | Points rendered in the 2D view |
-| `DECIMATION_CHUNK_SIZE` | 100 000 | Chunk size for streaming decimation |
-
-Session data is stored in `backend/storage/sessions/` and automatically deleted after 24 hours.
-Training examples are stored in `backend/storage/training/` and persist across sessions.
-The Optuna study database is at `backend/storage/optuna.db`.
+| Metric | XYZ in metres (converted automatically from feet) | `best_model_m.pth` |
+| Finetune | XYZ | `best_model.pth` |
+| Finetune + intensity | XYZ + intensity | `best_model_int.pth` |
+| Scratch | XYZ | `best_model_scratch.pth` |
+| Scratch + intensity | XYZ + intensity | `best_model_scratch_int.pth` |

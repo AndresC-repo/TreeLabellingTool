@@ -424,6 +424,23 @@ def run_prediction_instances(
     return {"labels": labels.tolist(), "n_instances": n_inst}
 
 
+def ensure_label_state(session_id: str, patch_id: str):
+    """Labels of a patch, loading them from its file if they aren't in memory yet
+    (after a backend restart, or a file just opened from the dataset page)."""
+    labels = lm.get_labels(patch_id)
+    if labels is not None:
+        return labels
+    path = get_patch_path(session_id, patch_id)
+    if not path.exists():
+        return None
+    las = laspy.read(str(path))
+    orig = np.array(las.classification, dtype=np.int32)
+    cur = (np.array(las.label, dtype=np.int32)
+           if "label" in las.point_format.extra_dimension_names else orig.copy())
+    lm.init_patch(patch_id, orig, current_labels=cur)
+    return lm.get_labels(patch_id)
+
+
 def _patch_record(session_id: str, patch_id: str) -> dict:
     """Registry entry for this patch (created for patches cut before the registry existed)."""
     p = dreg.find_patch(session_id, patch_id)
@@ -443,7 +460,7 @@ def _patch_record(session_id: str, patch_id: str) -> dict:
 @router.get("/{session_id}/{patch_id}/export-name")
 def export_name(session_id: str, patch_id: str):
     """Automatic export name (<city or state>_<tile>_p<n>_t<trees>.las) + where it will go."""
-    labels = lm.get_labels(patch_id)
+    labels = ensure_label_state(session_id, patch_id)
     if labels is None:
         raise HTTPException(404, "Patch label state not found")
     p = _patch_record(session_id, patch_id)
@@ -451,8 +468,8 @@ def export_name(session_id: str, patch_id: str):
     trees = dreg.count_trees(labels)
     root, connected = dreg.dataset_root()
     return {
-        "suggested": dreg.export_name(p["source"], p["patch_number"], trees,
-                                      src.get("city", ""), src.get("state", "")),
+        "suggested": dreg.default_name(p, trees),
+        "custom_name": bool(p.get("custom_name") or p.get("origin") == "folder"),
         "trees": trees,
         "source": p["source"],
         "patch_number": p["patch_number"],
@@ -469,15 +486,14 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
     patch_path = get_patch_path(session_id, patch_id)
     if not patch_path.exists():
         raise HTTPException(404, "Patch not found")
-    labels = lm.get_labels(patch_id)
+    labels = ensure_label_state(session_id, patch_id)
     if labels is None:
         raise HTTPException(404, "Patch label state not found")
 
     rec = _patch_record(session_id, patch_id)
     src = dreg.get_source(rec["source"]) or {}
     trees = dreg.count_trees(labels)
-    name = (req.output_filename or "").strip() or dreg.export_name(
-        rec["source"], rec["patch_number"], trees, src.get("city", ""), src.get("state", ""))
+    name = (req.output_filename or "").strip() or dreg.default_name(rec, trees)
     # Sanitize filename: only allow alphanumerics, dashes, underscores, dots
     safe_name = re.sub(r"[^\w\-.]", "_", name)
     if not safe_name.lower().endswith((".las", ".laz")):
@@ -492,7 +508,7 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
         if dest.exists() and owner not in (rec["key"], f"file:{safe_name}"):
             raise HTTPException(409, f"{safe_name} already exists in the labels folder "
                                      f"(from {owner or 'another file'}). Choose another name.")
-        if dest.exists() and owner == f"file:{safe_name}":
+        if dest.exists() and owner == f"file:{safe_name}" and owner != rec["key"]:
             raise HTTPException(409, f"{safe_name} already exists in the labels folder and was not "
                                      f"written by this patch. Choose another name.")
 
