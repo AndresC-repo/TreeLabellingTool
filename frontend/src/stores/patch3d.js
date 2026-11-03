@@ -91,6 +91,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const zClipMin = ref(0)
   const zClipMax = ref(0)
   const clipActive = ref(false)
+  const clipHover = ref(null)   // { axis: 'x'|'y'|'z', side: 'Min'|'Max' } while a clip slider is hovered
 
   // Bumped on every label change (apply, undo, redo, bulk apply) so panels can refresh
   // things that depend on the labels (undo/redo depth, tree count in the file name).
@@ -144,6 +145,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     yClipMin.value = 0; yClipMax.value = 0
     zClipMin.value = 0; zClipMax.value = 0
     clipActive.value = false
+    clipHover.value = null
   }
 
   return {
@@ -157,7 +159,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks,
     undoResult, groundIndices, dtmGrid, originX, originY, unitCode, unitScale, unitSource, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
-    xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive,
+    xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive, clipHover,
     addAppliedLabel, reset,
   }
 })

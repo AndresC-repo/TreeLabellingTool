@@ -589,6 +589,57 @@ function _rebuildPeaksMeshes() {
   if (pm) { peaksMesh = pm; scene.value.add(peaksMesh) }
 }
 
+// ── Clip guide: the cut plane of the hovered clip slider, plus a faint slab over the part
+// that would be removed. Axis colours match the clip panel (x red, y green, z blue).
+const CLIP_COLORS = { x: 0xff6a6a, y: 0x5ad66a, z: 0x6aa0ff }
+let clipGuide = null
+function clearClipGuide() {
+  if (!clipGuide) return
+  scene.value?.remove(clipGuide)
+  clipGuide.traverse(o => { o.geometry?.dispose(); o.material?.dispose() })
+  clipGuide = null
+}
+function drawClipGuide() {
+  clearClipGuide()
+  const h = store.clipHover
+  if (!h || !store.clipActive || !scene.value) return
+  const lo = { x: store.xBoundsMin, y: store.yBoundsMin, z: store.zBoundsMin }
+  const hi = { x: store.xBoundsMax, y: store.yBoundsMax, z: store.zBoundsMax }
+  const pad = cloudSpan * 0.03
+  const eps = Math.max(cloudSpan * 0.002, 0.01)
+  const v = store[`${h.axis}Clip${h.side}`]
+  const color = CLIP_COLORS[h.axis]
+  const box = (from, to, opacity, edges) => {
+    const size = {}, centre = {}
+    for (const a of ['x', 'y', 'z']) {
+      const a0 = a === h.axis ? from : lo[a] - pad, a1 = a === h.axis ? to : hi[a] + pad
+      size[a] = Math.max(a1 - a0, eps); centre[a] = (a0 + a1) / 2
+    }
+    const geo = new THREE.BoxGeometry(size.x, size.y, size.z)
+    const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity, depthWrite: false,
+      side: edges ? THREE.DoubleSide : THREE.FrontSide }))   // slab: one layer of tint only
+    mesh.position.set(centre.x, centre.y, centre.z)
+    mesh.renderOrder = 5
+    group.add(mesh)
+    if (edges) {
+      const line = new THREE.LineSegments(new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 }))
+      line.position.copy(mesh.position)
+      line.renderOrder = 6
+      group.add(line)
+    }
+  }
+  const group = new THREE.Group()
+  box(v - eps / 2, v + eps / 2, 0.22, true)                       // the cut plane
+  const [a0, a1] = h.side === 'Min' ? [lo[h.axis] - pad, v] : [v, hi[h.axis] + pad]
+  if (a1 - a0 > eps) box(a0, a1, 0.06, false)                      // what gets removed
+  clipGuide = group
+  scene.value.add(group)
+}
+watch(() => [store.clipHover, store.clipActive, store.xClipMin, store.xClipMax,
+             store.yClipMin, store.yClipMax, store.zClipMin, store.zClipMax], drawClipGuide)
+
 watch(() => store.segmentationPeaks,     _rebuildPeaksMeshes)
 watch(() => store.segmentationSeedPeaks, _rebuildPeaksMeshes)
 watch(() => store.segmentationRejectedPeaks, _rebuildPeaksMeshes)

@@ -9,48 +9,24 @@
     </div>
 
     <div v-if="store.clipActive" class="axes">
-      <!-- X axis -->
-      <div class="axis-section">
-        <div class="axis-label">X</div>
+      <!-- One block per axis. Hovering or dragging a slider shows its cut plane in the 3D view. -->
+      <div v-for="ax in AXES" :key="ax.key" class="axis-section" :class="'ax-' + ax.key">
+        <div class="axis-label">{{ ax.key }}</div>
         <div class="range-row">
-          <input type="range" :min="store.xBoundsMin" :max="store.xBoundsMax" :step="step"
-            v-model.number="store.xClipMin" @input="onClipChange" class="range-input" />
-          <input type="range" :min="store.xBoundsMin" :max="store.xBoundsMax" :step="step"
-            v-model.number="store.xClipMax" @input="onClipChange" class="range-input" />
+          <input v-for="side in ['Min', 'Max']" :key="side"
+            type="range" :min="store[ax.key + 'BoundsMin']" :max="store[ax.key + 'BoundsMax']" :step="step"
+            v-model.number="store[ax.key + 'Clip' + side]" @input="onClipChange" class="range-input"
+            :class="{ hot: isHover(ax.key, side) }"
+            @pointerenter="hoverOn(ax.key, side)" @pointerleave="hoverOff(ax.key, side)"
+            @pointerdown="dragging = { axis: ax.key, side }" @focus="hoverOn(ax.key, side)" @blur="hoverOff(ax.key, side, true)"
+            :title="`${ax.key.toUpperCase()} ${side.toLowerCase()}: removes the ${ax[side]} side`" />
         </div>
         <div class="range-vals">
-          <span>{{ fmt(store.xClipMin + store.originX) }}</span>
-          <span>{{ fmt(store.xClipMax + store.originX) }}</span>
-        </div>
-      </div>
-
-      <!-- Y axis -->
-      <div class="axis-section">
-        <div class="axis-label">Y</div>
-        <div class="range-row">
-          <input type="range" :min="store.yBoundsMin" :max="store.yBoundsMax" :step="step"
-            v-model.number="store.yClipMin" @input="onClipChange" class="range-input" />
-          <input type="range" :min="store.yBoundsMin" :max="store.yBoundsMax" :step="step"
-            v-model.number="store.yClipMax" @input="onClipChange" class="range-input" />
-        </div>
-        <div class="range-vals">
-          <span>{{ fmt(store.yClipMin + store.originY) }}</span>
-          <span>{{ fmt(store.yClipMax + store.originY) }}</span>
-        </div>
-      </div>
-
-      <!-- Z axis -->
-      <div class="axis-section">
-        <div class="axis-label">Z</div>
-        <div class="range-row">
-          <input type="range" :min="store.zBoundsMin" :max="store.zBoundsMax" :step="step"
-            v-model.number="store.zClipMin" @input="onClipChange" class="range-input" />
-          <input type="range" :min="store.zBoundsMin" :max="store.zBoundsMax" :step="step"
-            v-model.number="store.zClipMax" @input="onClipChange" class="range-input" />
-        </div>
-        <div class="range-vals">
-          <span>{{ fmt(store.zClipMin) }}</span>
-          <span>{{ fmt(store.zClipMax) }}</span>
+          <span>{{ fmt(store[ax.key + 'ClipMin'] + ax.offset()) }}</span>
+          <span v-if="store.clipHover?.axis === ax.key" class="side-hint">
+            cuts the {{ ax[store.clipHover.side] }} side
+          </span>
+          <span>{{ fmt(store[ax.key + 'ClipMax'] + ax.offset()) }}</span>
         </div>
       </div>
 
@@ -74,7 +50,7 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, watch, ref, onBeforeUnmount } from 'vue'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 
 const props = defineProps({
@@ -84,6 +60,30 @@ const props = defineProps({
 const emit = defineEmits(['clip-change', 'delete-clipped'])
 
 const store = usePatch3DStore()
+
+// Projected CRS: x = easting, y = northing
+const AXES = [
+  { key: 'x', Min: 'west',   Max: 'east',  offset: () => store.originX },
+  { key: 'y', Min: 'south',  Max: 'north', offset: () => store.originY },
+  { key: 'z', Min: 'bottom', Max: 'top',   offset: () => 0 },
+]
+
+// Which slider is hovered / dragged → store.clipHover → cut plane in the 3D view.
+// While dragging, the plane stays even if the pointer leaves the slider.
+const dragging = ref(null)
+const isHover = (axis, side) => store.clipHover?.axis === axis && store.clipHover?.side === side
+function hoverOn(axis, side) { store.clipHover = { axis, side } }
+function hoverOff(axis, side, force = false) {
+  if (!force && dragging.value) return
+  if (isHover(axis, side)) store.clipHover = null
+}
+function endDrag() {
+  if (!dragging.value) return
+  dragging.value = null
+  store.clipHover = null
+}
+window.addEventListener('pointerup', endDrag)
+onBeforeUnmount(() => { window.removeEventListener('pointerup', endDrag); store.clipHover = null })
 
 const step = computed(() => {
   const xRange = store.xBoundsMax - store.xBoundsMin
@@ -140,7 +140,7 @@ h3 { color: #adf; font-size: 14px; font-weight: 600; margin: 0; }
 .axis-section { margin-bottom: 8px; }
 .axis-label { font-size: 11px; font-weight: 600; color: #88a; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 1px; }
 
-.range-row { display: flex; flex-direction: column; gap: 3px; }
+.range-row { display: flex; flex-direction: column; gap: 12px; padding: 5px 0; }  /* thumbs must not overlap the other slider */
 .range-input {
   width: 100%;
   -webkit-appearance: none;
@@ -180,9 +180,20 @@ h3 { color: #adf; font-size: 14px; font-weight: 600; margin: 0; }
 }
 
 .range-vals {
-  display: flex; justify-content: space-between;
+  display: flex; justify-content: space-between; align-items: baseline;
   font-size: 10px; color: #667; font-family: monospace;
 }
+.side-hint { font-family: system-ui, sans-serif; font-size: 10.5px; font-weight: 600; }
+/* axis colours match the cut plane in the 3D view */
+.ax-x .side-hint, .ax-x .axis-label { color: #ff7a7a; }
+.ax-y .side-hint, .ax-y .axis-label { color: #6ee07e; }
+.ax-z .side-hint, .ax-z .axis-label { color: #78acff; }
+.ax-x .range-input.hot::-webkit-slider-thumb { background: #ff7a7a; }
+.ax-y .range-input.hot::-webkit-slider-thumb { background: #6ee07e; }
+.ax-z .range-input.hot::-webkit-slider-thumb { background: #78acff; }
+.ax-x .range-input.hot::-moz-range-thumb { background: #ff7a7a; }
+.ax-y .range-input.hot::-moz-range-thumb { background: #6ee07e; }
+.ax-z .range-input.hot::-moz-range-thumb { background: #78acff; }
 
 .clip-count { font-size: 12px; color: #f99; margin: 6px 0; }
 .faint { color: #556; }
