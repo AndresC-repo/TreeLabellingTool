@@ -43,8 +43,6 @@ def list_patch_ids(session_id: str) -> list[str]:
 
 def purge_session(session_id: str) -> int:
     """Delete a session's files and all in-memory state. Returns the number of patches removed.
-
-    Training examples (storage/training) are not touched.
     """
     patch_ids = list_patch_ids(session_id)
 

@@ -135,7 +135,6 @@
             {{ pendingRemove.patchCount === 1 ? 'patch' : 'patches' }} on the server.
           </template>
           Deleting removes the files, their patches and any saved outputs you haven't downloaded.
-          Training examples are kept.
         </p>
         <ul v-if="pendingRemove.entries.length > 1" class="confirm-list">
           <li v-for="e in pendingRemove.entries" :key="e.sessionId">
@@ -157,7 +156,6 @@
         <h3>Delete patch_{{ pendingRegion.patch_number }}?</h3>
         <p class="confirm-text">
           This patch has labels. Deleting removes the patch and any saved output you haven't downloaded.
-          Training examples are kept.
         </p>
         <div class="split-actions">
           <button @click="pendingRegion = null">Cancel</button>

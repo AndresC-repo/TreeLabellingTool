@@ -73,7 +73,7 @@ labelled; `data/labelling_registry.json` holds that list. Send the `data` folder
 - **3D patch viewer** — orbit/pan/zoom, point size, elevation filter, clipping, keyboard shortcuts
 - **Labelling** — screen-space lasso, tree IDs from 101 upwards, protect ground/building, replace a label inside a selection; **undo/redo up to 200 steps**
 - **NN inference** — SegmentAnyTree models (tree / non-tree), downloaded from Hugging Face
-- **Tree instance segmentation** — CHM watershed (min height, min peak height) with Optuna auto-tune
+- **Tree instance segmentation** — CHM watershed (min height, min peak height)
 - **Save** — writes `<City>_<tile>_p<n>_<labeller>_t<trees>.las` straight into the training labels folder; real ASPRS classes + exact labels in a `label` field + units marker
 - **Dataset overview** — all patches and source tiles with tree counts, regions, status and notes; double-click to reopen a patch, rename files, CSV export
 
@@ -144,9 +144,6 @@ Downloaded models are cached in the `hf_cache` volume.
 │   │   ├── segment_any_tree.py    # spconv model definition
 │   │   ├── tree_segmentor.py      # CHM watershed crown delineation
 │   │   ├── tree_metrics.py        # Per-tree height / crown metrics
-│   │   ├── seg_quality.py         # Geometric quality score for auto-tune
-│   │   ├── seg_autotuner.py       # Optuna hyperparameter search (geometric + supervised ARI)
-│   │   └── training_store.py      # Save/load ground-truth training examples
 │   ├── Dockerfile
 │   └── requirements.txt
 │
@@ -208,9 +205,7 @@ Downloaded models are cached in the `hf_cache` volume.
 ### Inference & segmentation workflow
 1. **Run Inference** (`I` key or button) — the backend loads the SegmentAnyTree model (downloaded from HuggingFace on first use), voxelizes the patch at 0.1 m, and returns per-point semantic labels: `0` = non-tree, `101` = tree.
 2. **Segment Trees** — a CHM is rasterized from tree points and smoothed (Duncanson 2014). Local maxima are used as watershed seeds; each crown segment becomes an instance label (201, 202, …).
-3. **Auto-tune** — Optuna searches 8 segmentation hyperparameters. Objective is a geometric quality score (coverage × compactness × crown area) unless supervised training examples exist, in which case it maximises mean Adjusted Rand Index across saved examples.
-4. **Save as Training Example** — stores the corrected segmentation (point coordinates + semantic + instance labels) in `storage/training/`. Future auto-tune runs use these as ground truth.
-5. **Apply to Labels** — bulk-applies the instance labels to the patch's persistent label state, which is written to the `.las` file on save.
+3. **Apply to Labels** — bulk-applies the instance labels to the patch's persistent label state, which is written to the `.las` file on save.
 
 ---
 

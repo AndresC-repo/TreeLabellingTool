@@ -13,6 +13,10 @@ from services.sessions import purge_session, touch_session, session_id_from_path
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    # Leftovers of the removed "Save as Training Example" / auto-tune feature
+    import shutil
+    shutil.rmtree(config.STORAGE_DIR / "training", ignore_errors=True)
+    (config.STORAGE_DIR / "optuna.db").unlink(missing_ok=True)
 
     async def _cleanup_old_sessions():
         while True:

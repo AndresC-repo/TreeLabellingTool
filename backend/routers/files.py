@@ -111,7 +111,6 @@ def set_units(session_id: str, req: UnitsRequest):
 def delete_session(session_id: str):
     """Remove an uploaded file and everything derived from it (patches, outputs, caches).
 
-    Training examples live in storage/training and are NOT affected.
     """
     # Only accept real session ids (UUIDs) so the path can't escape SESSIONS_DIR
     if not is_valid_session_id(session_id):

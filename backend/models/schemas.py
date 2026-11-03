@@ -112,23 +112,6 @@ class TreeMetrics(BaseModel):
 class TreeMetricsResponse(BaseModel):
     trees: List[TreeMetrics]
 
-class AutoTuneRequest(BaseModel):
-    labels: List[int]
-    n_trials: int = 30
-    dtm_grid: Optional[List[float]] = None
-    dtm_rows: int = 64
-    dtm_cols: int = 64
-    dtm_x_min: float = 0.0
-    dtm_y_min: float = 0.0
-    dtm_x_range: float = 1.0
-    dtm_y_range: float = 1.0
-
-class AutoTuneResponse(BaseModel):
-    best_params: Dict[str, float]
-    best_score: float
-    n_trials: int
-    mode: str = "geometric"   # "supervised" | "geometric"
-
 class PredictRequest(BaseModel):
     version: str = "finetune"
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
@@ -141,16 +124,6 @@ class PredictRequest(BaseModel):
     dtm_x_range: float = 1.0
     dtm_y_range: float = 1.0
 
-
-class MarkTrainingRequest(BaseModel):
-    semantic_labels: List[int]              # 0/101 per-point from store.semanticLabels
-    gt_instance_labels: Optional[List[int]] = None  # 201+ corrected instance labels from frontend; if omitted falls back to backend label state
-
-class MarkTrainingResponse(BaseModel):
-    example_id: str
-    n_points: int
-    n_trees: int
-    total_examples: int
 
 class RelabelSelectionRequest(BaseModel):
     point_indices: List[int]

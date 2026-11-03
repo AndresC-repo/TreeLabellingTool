@@ -107,17 +107,6 @@ export const getTreeMetrics = (sessionId, patchId, labels, cell_size, dtmGrid) =
   return api.post(`/patches/${sessionId}/${patchId}/tree-metrics`, payload)
 }
 
-export const autoTuneSegmentation = (sessionId, patchId, labels, nTrials, dtmGrid) => {
-  const payload = { labels, n_trials: nTrials, ...(dtmGrid ? dtmWorldParams(dtmGrid) : {}) }
-  return api.post(`/patches/${sessionId}/${patchId}/auto-tune-segmentation`, payload)
-}
-
-export const markTrainingExample = (sessionId, patchId, semanticLabels, gtInstanceLabels) =>
-  api.post(`/patches/${sessionId}/${patchId}/mark-training`, {
-    semantic_labels: semanticLabels,
-    ...(gtInstanceLabels ? { gt_instance_labels: gtInstanceLabels } : {}),
-  })
-
 export const relabelSelection = (sessionId, patchId, pointIndices, fromLabel, toLabel) =>
   api.post(`/patches/${sessionId}/${patchId}/relabel-selection`, {
     point_indices: pointIndices,
