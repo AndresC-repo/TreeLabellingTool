@@ -337,7 +337,7 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
     """Run NN inference on a patch and return per-point predicted class labels.
 
     Body (JSON):
-        version      : 'metric' | 'finetune' | 'finetune_int'
+        version      : 'metric' (latest) | 'metric_old'
         dtm_grid     : flat float array (dtm_rows * dtm_cols) from frontend class-2 ground points
         dtm_rows/cols: grid dimensions
         dtm_x/y_min  : world-space origin
@@ -356,7 +356,7 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
         cfg = _MODEL_CONFIGS[version]
         las = laspy.read(str(patch_path))
         mpu = get_session_units(session_id)["scale"]
-        labels = predict(
+        labels, probs = predict(
             np.array(las.x, dtype=np.float64),
             np.array(las.y, dtype=np.float64),
             np.array(las.z, dtype=np.float64),
@@ -372,19 +372,30 @@ def run_prediction(session_id: str, patch_id: str, req: PredictRequest = None):
             dtm_y_min=req.dtm_y_min,
             dtm_x_range=req.dtm_x_range,
             dtm_y_range=req.dtm_y_range,
+            return_probs=True,
         )
     except Exception as e:
         raise HTTPException(500, f"Inference error: {e}")
-    return {"labels": labels.tolist()}
+    import base64
+    # P(tree) per point as 0..255 (1 byte/point): the browser applies the threshold slider
+    # itself, so moving it needs no new request.
+    probs_u8 = np.clip(np.rint(probs * 255.0), 0, 255).astype(np.uint8)
+    return {
+        "probs_u8": base64.b64encode(probs_u8.tobytes()).decode("ascii"),
+        "threshold": float(cfg.get("threshold", 0.5)),
+        "n_tree": int((labels == 101).sum()),
+        "n_points": int(len(labels)),
+    }
 
 @router.get("/{session_id}/{patch_id}/predict-instances")
 def run_prediction_instances(
     session_id: str, patch_id: str,
-    version: str = "v1",
+    version: str = "metric",
     bandwidth: float = 2.5,      # metres
     min_points: int = 100,
     embed_weight: float = 0.3,
     max_spread: float = 6.0,     # metres
+    threshold: float | None = None,   # tree probability threshold (default: the model's)
 ):
     """Run 3-head instance segmentation inference on a patch.
 
@@ -416,7 +427,10 @@ def run_prediction_instances(
             max_spread=max_spread,
             cache_key=f"{session_id}:{patch_id}:{version}:{mpu}",
             metres_per_unit=mpu,
+            threshold=threshold,
         )
+    except ValueError as e:      # e.g. the model has no instance heads
+        raise HTTPException(400, str(e))
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"Instance inference error: {e}")

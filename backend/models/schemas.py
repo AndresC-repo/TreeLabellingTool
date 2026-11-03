@@ -113,7 +113,7 @@ class TreeMetricsResponse(BaseModel):
     trees: List[TreeMetrics]
 
 class PredictRequest(BaseModel):
-    version: str = "finetune"
+    version: str = "metric"   # "metric" (latest) | "metric_old"
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
     # When provided, used for accurate per-point height-above-ground normalisation.
     dtm_grid: Optional[List[float]] = None   # flat array, dtm_rows * dtm_cols values

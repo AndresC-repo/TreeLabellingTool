@@ -54,10 +54,10 @@
           <button
             :class="{ active: store.viewMode === 'prediction' && !store.predicting }"
             :disabled="store.predicting"
-            @click="inferenceOpen = !inferenceOpen"
+            @click="inferenceOpen = !inferenceOpen; if (inferenceOpen) loadModels()"
             title="Run inference model [I]"
           >
-            {{ store.predicting ? '…' : (store.hasPrediction ? inferenceVersions.find(v => v.id === store.inferenceVersion)?.label ?? 'Run' : 'Run') }}
+            {{ store.predicting ? '…' : (store.hasPrediction ? modelName(store.inferenceVersion) : 'Run') }}
             <kbd>I</kbd> ▾
           </button>
           <!-- Sub-views only visible after inference has been run -->
@@ -83,10 +83,14 @@
           <button
             v-for="v in inferenceVersions" :key="v.id"
             :class="{ active: store.inferenceVersion === v.id && store.viewMode === 'prediction' }"
-            :disabled="store.predicting"
+            :disabled="store.predicting || v.available === false"
             @click="selectInference(v.id)"
-            :title="v.title"
-          >{{ v.label }}<span class="inf-desc">{{ v.desc }}</span></button>
+            :title="modelTitle(v)"
+          >
+            <span class="inf-main">{{ v.label }} <span class="inf-tag" :class="v.tag">{{ v.tag }}</span></span>
+            <span class="inf-desc">{{ modelDesc(v) }}</span>
+            <span class="inf-desc">{{ modelKind(v) }}</span>
+          </button>
         </div>
       </div>
 
@@ -128,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import * as THREE from 'three'
 import { TrackballControls } from 'three/addons/controls/TrackballControls.js'
 import { useThreeScene } from '../../composables/useThreeScene.js'
@@ -137,7 +141,7 @@ import { usePatch3DStore } from '../../stores/patch3d.js'
 import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
-import { labelPoints, getNextLabel, predictPatch, deletePoints } from '../../api/client.js'
+import { labelPoints, getNextLabel, predictPatch, deletePoints, getModels } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
 import ElevationFilter from './ElevationFilter.vue'
 
@@ -153,11 +157,30 @@ const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor
 
 const lasso = useLasso3D(camera, renderer)
 
-const inferenceVersions = [
-  { id: 'metric',       label: 'XYZ (m)', desc: 'Metric model — input converted to metres', title: 'Inference — metric model (best_model_m.pth), XYZ in metres [I]' },
-  { id: 'finetune',     label: 'XYZ',   desc: 'Coordinates only',  title: 'Inference — XYZ only' },
-  { id: 'finetune_int', label: 'XYZ+I', desc: 'XYZ + Intensity',   title: 'Inference — XYZ + Intensity' },
-]
+// Models from the backend, with the date each was last updated on Hugging Face.
+// Shown immediately with these defaults; dates fill in when /models answers.
+const inferenceVersions = computed(() => store.models)
+const fmtDay = iso => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
+const modelKind = v => `threshold ${v.threshold}${v.instance_heads === false ? ' · tree/non-tree only' : ''}`
+function modelDesc(v) {
+  if (v.available === undefined) return 'checking Hugging Face…'
+  if (!v.available) return v.source === 'cache' ? 'offline — not downloaded yet' : 'not on Hugging Face yet'
+  if (v.updated) return `updated ${fmtDay(v.updated)}`
+  return v.downloaded ? `offline — downloaded ${fmtDay(v.downloaded)}` : 'offline — using downloaded copy'
+}
+function modelTitle(v) {
+  const parts = [`${v.filename} — XYZ in metres, ${modelKind(v)}`]
+  if (v.commit_title) parts.push(`last change: "${v.commit_title}"`)
+  if (v.id === 'metric') parts.push('[I] runs the last used model')
+  return parts.join('\n')
+}
+const modelName = id => {
+  const v = inferenceVersions.value.find(m => m.id === id)
+  return v ? `${v.label} ${v.tag}` : 'Run'
+}
+async function loadModels() {
+  try { store.models = (await getModels()).data } catch { /* keep defaults */ }
+}
 
 const inferenceOpen = ref(false)
 const inferenceWrap = ref(null)
@@ -345,59 +368,89 @@ function _paletteHex(labelValue) {
 
 const INFERENCE_NAMES = { 0: 'Non-tree', 101: 'Tree' }
 
-async function runPrediction(version = 'finetune') {
+// Points too close to the DTM to be trees (lamp posts, cars, building bases): never tree,
+// whatever the threshold. Computed once per inference run.
+function computeDtmExclude(n) {
+  const mask = new Uint8Array(n)
+  if (!store.dtmGrid) return mask
+  const positions = getPositions()
+  const { grid, rows, cols, xMin, yMin, xRange, yRange } = store.dtmGrid
+  const MIN_TREE_HAG = 1.5 / (store.unitScale || 1)  // 1.5 m, in the data's units
+  for (let i = 0; i < n; i++) {
+    const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2]
+    const cx = Math.max(0, Math.min(cols - 1, Math.floor((x - xMin) / xRange * cols)))
+    const cy = Math.max(0, Math.min(rows - 1, Math.floor((y - yMin) / yRange * rows)))
+    if (z - grid[cy * cols + cx] < MIN_TREE_HAG) mask[i] = 1
+  }
+  return mask
+}
+
+// tree / non-tree labels from the stored probabilities and the current threshold
+function applyThreshold() {
+  const probs = store.treeProbs
+  if (!probs) return
+  const t = store.treeThreshold
+  const ex = store.dtmExclude
+  const labels = new Int32Array(probs.length)
+  let nTree = 0
+  for (let i = 0; i < probs.length; i++) {
+    if (probs[i] >= t && !(ex && ex[i])) { labels[i] = 101; nTree++ }
+  }
+  applyPredictionColors(labels)
+  store.inferenceLabels = labels   // current display labels (may be overwritten by segmentation)
+  store.semanticLabels  = labels   // tree / non-tree — input of Segment Trees (CHM)
+  store.segmentationPeaks = []
+  store.segmentationSeedPeaks = []
+  store.segmentationRejectedPeaks = []
+  store.predictionLegend = [
+    { label: 0,   name: INFERENCE_NAMES[0],   color: _paletteHex(0),   count: labels.length - nTree },
+    { label: 101, name: INFERENCE_NAMES[101], color: _paletteHex(101), count: nTree },
+  ].filter(e => e.count > 0)
+}
+
+// Slider moves: recompute at most once per frame
+let thresholdFrame = 0
+watch(() => [store.treeThreshold, store.thresholdTick], () => {
+  if (!store.treeProbs || thresholdFrame) return
+  thresholdFrame = requestAnimationFrame(() => {
+    thresholdFrame = 0
+    applyThreshold()
+    if (store.viewMode !== 'inference-chm') store.viewMode = 'prediction'
+  })
+})
+
+function decodeProbs(b64) {
+  const bin = atob(b64)
+  const out = new Float32Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) / 255
+  return out
+}
+
+async function runPrediction(version = 'metric') {
   if (store.predicting) return
   store.predicting = true
+  // keep a hand-set threshold when the same model is run again; a new model starts at its default
+  const sameModel = store.treeProbs && store.inferenceVersion === version
   store.inferenceVersion = version
-  store.segmentationPeaks = []   // clear previous peaks when re-running inference
-  store.segmentationRejectedPeaks = []
   try {
     const res = await predictPatch(route.params.id, route.params.patchId, version, store.dtmGrid)
-    const labels = res.data.labels
-
-    // DTM ground-level filter: relabel tree points that are below MIN_TREE_HAG
-    // as non-tree.  This removes misclassified ground, lamp-posts, and building
-    // bases that sit within the DTM elevation band before watershed runs.
-    if (store.dtmGrid) {
-      const positions = getPositions()
-      const { grid, rows, cols, xMin, yMin, xRange, yRange } = store.dtmGrid
-      const MIN_TREE_HAG = 1.5 / (store.unitScale || 1)  // 1.5 m, in the data's units
-      let filtered = 0
-      for (let i = 0; i < labels.length; i++) {
-        if (labels[i] !== 101) continue
-        const x = positions[i * 3]
-        const y = positions[i * 3 + 1]
-        const z = positions[i * 3 + 2]
-        const cx = Math.max(0, Math.min(cols - 1, Math.floor((x - xMin) / xRange * cols)))
-        const cy = Math.max(0, Math.min(rows - 1, Math.floor((y - yMin) / yRange * rows)))
-        if (z - grid[cy * cols + cx] < MIN_TREE_HAG) { labels[i] = 0; filtered++ }
-      }
-      if (filtered > 0) console.log(`[DTM filter] removed ${filtered} ground-level tree points (HAG < 1.5 m)`)
-    }
-
-    applyPredictionColors(labels)
+    const probs = decodeProbs(res.data.probs_u8)
+    store.dtmExclude = computeDtmExclude(probs.length)
+    store.defaultThreshold = res.data.threshold
+    if (!sameModel) store.treeThreshold = res.data.threshold
+    store.treeProbs = probs
+    applyThreshold()
     store.viewMode = 'prediction'   // must come AFTER applyPredictionColors so predictionColors buffer exists
     store.hasPrediction = true
-    store.inferenceLabels = labels  // current display labels (may be overwritten by segmentation)
-    store.semanticLabels  = labels  // original 0/101 labels — never overwritten by segmentation
-
-    // Build legend: count occurrences of each label
-    const counts = {}
-    for (const lbl of labels) counts[lbl] = (counts[lbl] || 0) + 1
-    store.predictionLegend = Object.entries(counts)
-      .sort(([a], [b]) => Number(a) - Number(b))
-      .map(([lbl, count]) => ({
-        label:  Number(lbl),
-        name:   INFERENCE_NAMES[lbl] ?? `Class ${lbl}`,
-        color:  _paletteHex(Number(lbl)),
-        count,
-      }))
   } catch (err) {
     console.error('Inference failed:', err)
   } finally {
     store.predicting = false
   }
 }
+
+// The inference panel asks for a run through the store (it has no access to the renderer)
+watch(() => store.predictRequest, req => { if (req) runPrediction(req.version) })
 
 async function applyGndDtm() {
   const gndIdx = store.groundIndices
@@ -543,6 +596,7 @@ watch(() => [store.originX, store.originY], _rebuildPeaksMeshes)
 watch(() => store.viewMode, _rebuildPeaksMeshes)
 
 onMounted(async () => {
+  loadModels()
   document.addEventListener('click', onClickOutsideInference, true)
   const result = await load()
   store.pointCount = pointCount.value
@@ -790,7 +844,12 @@ defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPr
 .inference-menu button:last-child { border-bottom: none; }
 .inference-menu button:hover:not(.active):not(:disabled) { background: #2a3a5a; }
 .inference-menu button.active { background: #3a5a8e; color: #fff; }
-.inf-desc { font-size: 10px; color: #667; font-weight: normal; }
+.inf-desc { font-size: 10px; color: #778; font-weight: normal; }
+.inf-main { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.inf-tag { font-size: 9.5px; padding: 0 5px; border-radius: 8px; line-height: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.inf-tag.latest { background: #1f4a33; color: #8e8; }
+.inf-tag.old { background: #3a3448; color: #b9a8d8; }
+.inference-menu button:disabled .inf-tag { opacity: 0.5; }
 .inference-menu button.active .inf-desc { color: #99c; }
 
 .no-ground-msg {

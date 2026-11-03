@@ -1,13 +1,12 @@
 """
-Inference service for SegmentAnyTree models.
+Inference service for SegmentAnyTree models (Hugging Face: AndCarr/UrbanTreeDetector).
 
-metric       -- XYZ, METRES     in_channels=3  best_model_m.pth         (finetuned on metric data)
-finetune     -- XYZ             in_channels=3  best_model.pth           (finetuned)
-finetune_int -- XYZ + Intensity in_channels=4  best_model_int.pth       (finetuned)
-scratch      -- XYZ             in_channels=3  best_model_scratch.pth   (trained from scratch)
-scratch_int  -- XYZ + Intensity in_channels=4  best_model_scratch_int.pth (trained from scratch)
+metric      -- XYZ, METRES  in_channels=3  best_model_m.pth      (latest)  tree/non-tree only, threshold 0.55
+metric_old  -- XYZ, METRES  in_channels=3  best_model_m_old.pth  (previous)       threshold 0.75
 """
 from __future__ import annotations
+import os
+import time
 import numpy as np
 import torch
 import spconv.pytorch as spconv
@@ -38,6 +37,9 @@ _TILE_SIZE_M  = 120.0   # side length of each inference tile
 _TILE_STEP_M  =  60.0   # step between tiles (50 % overlap)
 _MIN_TILE_PTS =  20     # skip tiles with fewer points than this
 
+# Hugging Face convention (AndCarr/UrbanTreeDetector):
+#   best_model_m.pth      latest metric model
+#   best_model_m_old.pth  the previous one (moved there when a new latest is uploaded)
 _MODEL_CONFIGS: dict[str, dict] = {
     'metric': {
         'filename':           'best_model_m.pth',
@@ -45,43 +47,27 @@ _MODEL_CONFIGS: dict[str, dict] = {
         'use_intensity':      False,
         'use_classification': False,
         'input_units':        'm',
-        'label':              'Metric — XYZ (m)',
+        'label':              'XYZ (m)',
+        'tag':                'latest',
+        'threshold':          0.55,    # tree if P(tree) >= threshold
+        'instance_heads':     False,   # tree / non-tree only: no offset / embedding heads
     },
-    'finetune': {
-        'filename':           'best_model.pth',
-        'input_units':        'raw',
+    'metric_old': {
+        'filename':           'best_model_m_old.pth',
         'in_channels':        3,
         'use_intensity':      False,
         'use_classification': False,
-        'label':              'Finetune — XYZ',
-    },
-    'finetune_int': {
-        'filename':           'best_model_int.pth',
-        'input_units':        'raw',
-        'in_channels':        4,
-        'use_intensity':      True,
-        'use_classification': False,
-        'label':              'Finetune — XYZ + Intensity',
-    },
-    'scratch': {
-        'filename':           'best_model_scratch.pth',
-        'input_units':        'raw',
-        'in_channels':        3,
-        'use_intensity':      False,
-        'use_classification': False,
-        'label':              'Scratch — XYZ',
-    },
-    'scratch_int': {
-        'filename':           'best_model_scratch_int.pth',
-        'input_units':        'raw',
-        'in_channels':        4,
-        'use_intensity':      True,
-        'use_classification': False,
-        'label':              'Scratch — XYZ + Intensity',
+        'input_units':        'm',
+        'label':              'XYZ (m)',
+        'tag':                'old',
+        'threshold':          0.75,
+        'instance_heads':     True,    # checked again when the file is loaded
     },
 }
 
 _loaded: dict[str, SegmentAnyTree] = {}
+_loaded_path: dict[str, str] = {}   # version -> real path of the loaded file (changes on a new upload)
+_has_heads: dict[str, bool] = {}    # version -> checkpoint contains trained Offset/Embed heads
 
 # NN output cache: key = "session_id:patch_id:version"
 # Stores (pt_probs, pt_offs, pt_embs) so Run Instance Segmentation
@@ -91,16 +77,72 @@ VALID_VERSIONS = tuple(_MODEL_CONFIGS.keys())
 
 
 # ---------------------------------------------------------------------------
+# Model list for the UI: when was each file last updated on Hugging Face
+# ---------------------------------------------------------------------------
+
+_CATALOG_TTL = 600   # seconds
+_catalog_cache: dict = {"at": 0.0, "data": None}
+
+
+def model_catalog(refresh: bool = False) -> list[dict]:
+    """[{id, label, tag, filename, available, updated, commit_title, size, source}]
+
+    source "hub":   date of the last commit that changed the file on Hugging Face
+    source "cache": Hub unreachable; available = the file is in the local download cache
+    """
+    if not refresh and _catalog_cache["data"] and time.time() - _catalog_cache["at"] < _CATALOG_TTL:
+        return _catalog_cache["data"]
+    from huggingface_hub import HfApi, try_to_load_from_cache
+    files = [c['filename'] for c in _MODEL_CONFIGS.values()]
+    info, source = {}, "hub"
+    try:
+        for f in HfApi().get_paths_info(_MODEL_REPO, files, expand=True):
+            lc = getattr(f, "last_commit", None)
+            info[f.path] = {
+                "available": True,
+                "updated": lc.date.isoformat() if lc and lc.date else None,
+                "commit_title": lc.title if lc else None,
+                "size": getattr(f, "size", None),
+            }
+    except Exception as e:
+        print(f"[predictor] Hugging Face not reachable for the model list: {e}")
+        source = "cache"
+        for name in files:
+            cached = try_to_load_from_cache(_MODEL_REPO, name)
+            if isinstance(cached, str):
+                info[name] = {"available": True, "updated": None, "commit_title": None,
+                              "size": os.path.getsize(cached),
+                              "downloaded": time.strftime("%Y-%m-%dT%H:%M:%S",
+                                                          time.gmtime(os.path.getmtime(cached))) + "+00:00"}
+    out = []
+    for vid, c in _MODEL_CONFIGS.items():
+        i = info.get(c['filename'], {"available": False, "updated": None, "commit_title": None, "size": None})
+        out.append({"id": vid, "label": c['label'], "tag": c.get('tag', ''), "filename": c['filename'],
+                    "input_units": c['input_units'], "threshold": c.get('threshold', 0.5),
+                    "instance_heads": bool(c.get('instance_heads', True) and _has_heads.get(vid, True)),
+                    "source": source, **i})
+    # offline answers are only kept for a minute, so the dates show up soon after reconnecting
+    _catalog_cache.update(at=time.time() - (_CATALOG_TTL - 60 if source == "cache" else 0), data=out)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
 
 def _get_model(version: str) -> SegmentAnyTree:
-    if version in _loaded:
-        return _loaded[version]
-
     cfg = _MODEL_CONFIGS[version]
-    print(f"[predictor] Downloading {cfg['filename']} ({cfg['label']}) ...")
-    path = hf_hub_download(repo_id=_MODEL_REPO, filename=cfg['filename'])
+    # hf_hub_download checks the Hub each time (a quick HEAD request) and only downloads
+    # when the file changed; offline it returns the cached copy. A new upload therefore
+    # gives a new path, and the model is reloaded.
+    path = os.path.realpath(hf_hub_download(repo_id=_MODEL_REPO, filename=cfg['filename']))
+    if version in _loaded and _loaded_path.get(version) == path:
+        return _loaded[version]
+    if version in _loaded:
+        print(f"[predictor] {cfg['filename']} changed on Hugging Face -- reloading.")
+        for k in [k for k in _NN_CACHE if f":{version}:" in k]:
+            _NN_CACHE.pop(k, None)   # cached outputs of the previous model
+    _loaded_path[version] = path
     print(f"[predictor] Loading state dict from {path} ...")
 
     obj = torch.load(path, map_location='cpu', weights_only=False)
@@ -112,6 +154,8 @@ def _get_model(version: str) -> SegmentAnyTree:
         obj.eval()
         print(f"[predictor] {version.upper()} ready (full-model save).")
         return obj
+
+    _has_heads[version] = any(k.startswith(('Offset.', 'Embed.')) for k in state_dict)
 
     # Auto-detect embedding_dim from checkpoint (Embed.1.weight shape[0])
     embed_weight = state_dict.get('Embed.1.weight')
@@ -435,7 +479,7 @@ def predict(
     z: np.ndarray,
     intensity: np.ndarray | None = None,
     classification: np.ndarray | None = None,
-    version: str = 'finetune',
+    version: str = 'metric',
     cache_key: str | None = None,
     dtm_grid: list | None = None,
     dtm_rows: int = 64,
@@ -445,7 +489,8 @@ def predict(
     dtm_x_range: float = 1.0,
     dtm_y_range: float = 1.0,
     metres_per_unit: float = 1.0,
-) -> np.ndarray:
+    return_probs: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Per-point semantic prediction.
 
     Args:
@@ -453,7 +498,7 @@ def predict(
         metres_per_unit: file units -> metres (0.3048006 for US survey feet)
         intensity      : float32 (N,) raw intensity  (required for v3, v4)
         classification : float32 (N,) ASPRS class    (required for v2, v4)
-        version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
+        version        : model id, see _MODEL_CONFIGS
 
     Returns:
         labels : int32 (N,) -- 0=non-tree, 101=tree
@@ -497,12 +542,14 @@ def predict(
             _NN_CACHE[cache_key] = (probs, _offs, _embs)
             print(f"[predictor:{version}] NN outputs cached (key={cache_key})")
 
-    _TREE_THRESHOLD = 0.4   # lower = more recall; default argmax was effectively 0.5
-    point_labels = (probs[:, 1] >= _TREE_THRESHOLD).astype(np.int32)
+    threshold = float(cfg.get('threshold', 0.5))   # per model, see _MODEL_CONFIGS
+    point_labels = (probs[:, 1] >= threshold).astype(np.int32)
     point_labels[point_labels == 1] = 101  # 1=tree -> 101
 
     print(f"[predictor:{version}] Done. "
           f"Counts: {dict(zip(*np.unique(point_labels, return_counts=True)))}")
+    if return_probs:   # P(tree) per point, for the threshold slider in the UI
+        return point_labels, np.asarray(probs[:, 1], dtype=np.float32)
     return point_labels
 
 
@@ -561,7 +608,7 @@ def predict_instances(
     z: np.ndarray,
     intensity: np.ndarray | None = None,
     classification: np.ndarray | None = None,
-    version: str = 'finetune',
+    version: str = 'metric_old',
     bandwidth: float = 2.0,
     min_points: int = 100,
     embed_weight: float = 0.3,
@@ -575,6 +622,7 @@ def predict_instances(
     dtm_x_range: float = 1.0,
     dtm_y_range: float = 1.0,
     metres_per_unit: float = 1.0,
+    threshold: float | None = None,
 ) -> np.ndarray:
     """Per-point instance segmentation using all three model heads.
 
@@ -583,7 +631,7 @@ def predict_instances(
         metres_per_unit: file units -> metres (0.3048006 for US survey feet)
         intensity      : float32 (N,) raw intensity (required for v3, v4)
         classification : float32 (N,) ASPRS class  (required for v2, v4)
-        version        : 'finetune' | 'finetune_int' | 'scratch' | 'scratch_int'
+        version        : a model with instance heads (see _MODEL_CONFIGS['instance_heads'])
         bandwidth      : mean-shift bandwidth in metres (converted to the model frame)
         min_points     : minimum cluster size to be kept as a tree
         embed_weight   : embedding vs XY weighting for clustering
@@ -601,7 +649,13 @@ def predict_instances(
     if cfg['use_classification'] and classification is None:
         raise ValueError(f"version='{version}' requires classification values")
 
+    no_heads = (f"{cfg['label']} {cfg.get('tag', '')} ({cfg['filename']}) has no instance heads -- "
+                "it only separates tree / non-tree. Use 'Segment Trees (CHM)' to split trees.")
+    if not cfg.get('instance_heads', True):
+        raise ValueError(no_heads)
     model = _get_model(version)
+    if not _has_heads.get(version, True):
+        raise ValueError(no_heads)
 
     dtm = dict(dtm_grid=dtm_grid, dtm_rows=dtm_rows, dtm_cols=dtm_cols, dtm_x_min=dtm_x_min,
                dtm_y_min=dtm_y_min, dtm_x_range=dtm_x_range, dtm_y_range=dtm_y_range)
@@ -635,8 +689,7 @@ def predict_instances(
             _NN_CACHE[cache_key] = (pt_probs, pt_offs, pt_embs)
             print(f"[predictor:{version}] NN outputs cached (key={cache_key})")
 
-    _TREE_THRESHOLD = 0.4
-    tree_mask = pt_probs[:, 1] >= _TREE_THRESHOLD
+    tree_mask = pt_probs[:, 1] >= float(threshold if threshold is not None else cfg.get('threshold', 0.5))
     n_tree    = int(tree_mask.sum())
     print(f"[predictor:{version}] {n_tree:,}/{len(x):,} tree pts -- clustering ...")
 

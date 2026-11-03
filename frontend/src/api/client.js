@@ -91,7 +91,10 @@ export const getColormap = (sessionId, scalarField = 'classification') =>
 export const getPatchColormap = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/colormap`)
 
-export const predictPatch = (sessionId, patchId, version = 'finetune', dtmGrid = null) => {
+// Inference models with their last update on Hugging Face
+export const getModels = (refresh = false) => api.get('/models', { params: refresh ? { refresh: 1 } : {} })
+
+export const predictPatch = (sessionId, patchId, version = 'metric', dtmGrid = null) => {
   const payload = { version, ...(dtmGrid ? dtmWorldParams(dtmGrid) : {}) }
   return api.post(`/patches/${sessionId}/${patchId}/predict`, payload)
 }
@@ -114,10 +117,10 @@ export const relabelSelection = (sessionId, patchId, pointIndices, fromLabel, to
     to_label: toLabel,
   })
 
-export const predictInstances = (sessionId, patchId, version = 'v1', params = {}) => {
+export const predictInstances = (sessionId, patchId, version = 'metric_old', params = {}, threshold = null) => {
   const { bandwidth = 2.0, min_points = 100, embed_weight = 0.3, max_spread = 5.0 } = params
   return api.get(`/patches/${sessionId}/${patchId}/predict-instances`, {
-    params: { version, bandwidth, min_points, embed_weight, max_spread },
+    params: { version, bandwidth, min_points, embed_weight, max_spread, ...(threshold != null ? { threshold } : {}) },
   })
 }
 

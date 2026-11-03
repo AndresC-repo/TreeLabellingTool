@@ -229,12 +229,17 @@ Downloaded models are cached in the `hf_cache` volume.
 
 ## Inference Models
 
-Downloaded automatically from Hugging Face (`AndCarr/UrbanTreeDetector`) on first use.
+Downloaded automatically from Hugging Face (`AndCarr/UrbanTreeDetector`). The **Run ▾** menu shows when each
+file was last changed on Hugging Face. A new upload is picked up on the next run, without restarting.
 
-| Model | Input | File |
-|---|---|---|
-| Metric | XYZ in metres (converted automatically from feet) | `best_model_m.pth` |
-| Finetune | XYZ | `best_model.pth` |
-| Finetune + intensity | XYZ + intensity | `best_model_int.pth` |
-| Scratch | XYZ | `best_model_scratch.pth` |
-| Scratch + intensity | XYZ + intensity | `best_model_scratch_int.pth` |
+| Menu entry | File on Hugging Face | Tree threshold | Instance heads |
+|---|---|---|---|
+| XYZ (m) · latest | `best_model_m.pth` | 0.55 | no (tree / non-tree only) |
+| XYZ (m) · old | `best_model_m_old.pth` | 0.75 | yes |
+
+Input is XYZ in metres for both (feet are converted automatically). A point is labelled tree when the
+model's tree probability is at least the threshold. Thresholds and heads are set per entry in
+`backend/services/predictor.py` (`_MODEL_CONFIGS`) — update them there when you swap models.
+
+To publish a new model: rename the current `best_model_m.pth` to `best_model_m_old.pth` on Hugging Face,
+then upload the new one as `best_model_m.pth`.

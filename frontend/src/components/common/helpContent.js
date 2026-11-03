@@ -79,6 +79,7 @@ export const HELP = {
         heading: 'Let the computer help',
         steps: [
           '<b>Run ▾</b> (or <b>I</b>): the neural network marks tree / non-tree points.',
+          'Drag the <b>Tree threshold</b> slider to change how sure the model must be: left = more trees, right = fewer. It updates instantly; ↺ goes back to the model\'s default.',
           '<b>Segment Trees (CHM)</b> splits them into single trees. Hover a setting for what it does; <b>Min height</b> and <b>Min peak height</b> matter most.',
           'Looks right? <b>Apply to Labels</b>, then fix mistakes by hand with the lasso.',
         ],

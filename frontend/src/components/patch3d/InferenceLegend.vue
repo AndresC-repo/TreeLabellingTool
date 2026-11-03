@@ -10,6 +10,28 @@
       <span class="cnt">{{ e.count.toLocaleString() }}</span>
     </div>
 
+    <!-- Tree threshold: applied in the browser to the stored probabilities, so it is instant -->
+    <div v-if="store.treeProbs" class="thr">
+      <div class="thr-head">
+        <span title="A point is a tree when the model's tree probability is at least this value">Tree threshold</span>
+        <b>{{ store.treeThreshold.toFixed(2) }}</b>
+        <button v-if="Math.abs(store.treeThreshold - store.defaultThreshold) > 0.001" class="thr-reset"
+                @click="store.treeThreshold = store.defaultThreshold"
+                :title="`Back to this model's default (${store.defaultThreshold})`">↺ {{ store.defaultThreshold }}</button>
+      </div>
+      <div class="thr-track">
+        <svg class="thr-hist" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true">
+          <rect v-for="(h, i) in probHist" :key="i" :x="i * 100 / probHist.length + 0.15" :y="24 - h"
+                :width="100 / probHist.length - 0.3" :height="h"
+                :class="(i + 0.5) / probHist.length >= store.treeThreshold ? 'is-tree' : 'not-tree'" />
+        </svg>
+        <input type="range" min="0.05" max="0.95" step="0.01" v-model.number="store.treeThreshold"
+               aria-label="Tree threshold" />
+      </div>
+      <div class="thr-scale"><span>← more trees</span><span>fewer trees →</span></div>
+      <p v-if="segmentedView" class="thr-note">Moving the slider clears the current tree segmentation.</p>
+    </div>
+
     <!-- Result message -->
     <p v-if="instMessage" class="info-msg">{{ instMessage }}</p>
 
@@ -51,6 +73,10 @@
       ↩ Back to Semantic View
     </button>
 
+    <p v-if="noInstanceHeads" class="no-heads-note">
+      {{ modelLabel }} only separates tree / non-tree. Use <b>Segment Trees (CHM)</b> below to split the trees.
+    </p>
+    <template v-else>
     <!-- Instance Segmentation Parameters — shown just above Run Instance Segmentation -->
     <div class="section-header" @click="instParamsOpen = !instParamsOpen">
       <span>⚙ Instance Segmentation Parameters</span>
@@ -84,6 +110,7 @@
     >
       {{ instRunning ? 'Running…' : 'Run Instance Segmentation' }}
     </button>
+    </template>
 
     <!-- Apply to Labels -->
     <button
@@ -301,11 +328,25 @@ const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-appli
 const route = useRoute()
 const store = usePatch3DStore()
 
-const VERSION_LABELS = { metric: 'Metric — XYZ (m)', finetune: 'Finetune — XYZ', finetune_int: 'Finetune — XYZ+I', scratch: 'Scratch — XYZ', scratch_int: 'Scratch — XYZ+I' }
-const versionLabel = computed(() => VERSION_LABELS[store.inferenceVersion] ?? '')
+const currentModel = computed(() => store.models.find(m => m.id === store.inferenceVersion))
+const modelLabel = computed(() => currentModel.value ? `${currentModel.value.label} ${currentModel.value.tag}` : '')
+const versionLabel = computed(() => modelLabel.value)   // the threshold is shown on the slider
+const noInstanceHeads = computed(() => currentModel.value?.instance_heads === false)
 
 const applying        = ref(false)
-const semanticRunning = ref(false)
+const semanticRunning = computed(() => store.predicting)
+
+// Histogram of P(tree) (40 bins, square-root heights so small bins stay visible)
+const probHist = computed(() => {
+  const probs = store.treeProbs
+  if (!probs) return []
+  const bins = new Array(40).fill(0)
+  for (let i = 0; i < probs.length; i++) bins[Math.min(39, Math.floor(probs[i] * 40))]++
+  const max = Math.max(1, ...bins.map(Math.sqrt))
+  return bins.map(b => b ? Math.max(1, Math.sqrt(b) / max * 24) : 0)
+})
+// labels on screen differ from plain tree / non-tree (segmentation or instances applied)
+const segmentedView = computed(() => !!store.inferenceLabels && store.inferenceLabels !== store.semanticLabels)
 const applied         = ref(false)
 const instRunning     = ref(false)
 const instMessage     = ref('')
@@ -417,29 +458,14 @@ function applyInferenceLabel(targetLabel) {
   emit('inference-edited', newLabels)
 }
 
-async function runSemantic() {
-  if (semanticRunning.value) return
-  semanticRunning.value = true
-  try {
-    const res = await predictPatch(
-      route.params.id,
-      route.params.patchId,
-      store.inferenceVersion,
-    )
-    const labels = new Int32Array(res.data.labels)
-    store.inferenceLabels  = labels
-    store.semanticLabels   = labels
-    store.hasPrediction    = true
-    store.viewMode         = 'prediction'
-    emit('segment-done', labels)
-  } catch (err) {
-    console.error('Semantic inference failed:', err)
-  } finally {
-    semanticRunning.value = false
-  }
+function runSemantic() {
+  // the 3D view runs it (decodes probabilities, applies the threshold, recolours)
+  if (store.predicting) return
+  store.predictRequest = { version: store.inferenceVersion, at: Date.now() }
 }
 
 function resetToSemantic() {
+  if (store.treeProbs) { store.thresholdTick++; return }   // redraw from the probabilities
   if (!store.semanticLabels) return
   store.inferenceLabels = store.semanticLabels
   store.viewMode        = 'prediction'
@@ -461,6 +487,7 @@ async function runInstanceSegmentation() {
       route.params.patchId,
       store.inferenceVersion,
       instParams,
+      store.treeProbs ? store.treeThreshold : null,
     )
     const { labels, n_instances } = res.data
     store.inferenceLabels = labels
@@ -594,6 +621,20 @@ async function applyToLabels() {
 </script>
 
 <style scoped>
+.thr { margin: 8px 0 10px; padding: 8px 9px 6px; background: #121830; border: 1px solid #263052; border-radius: 6px; }
+.thr-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aab; }
+.thr-head b { color: #fff; font-variant-numeric: tabular-nums; }
+.thr-reset { margin-left: auto; background: none; border: 1px solid #36406a; color: #9ab; border-radius: 4px; font-size: 10.5px; padding: 1px 6px; cursor: pointer; }
+.thr-reset:hover { color: #fff; border-color: #5a6aa0; }
+.thr-track { position: relative; height: 34px; margin-top: 4px; }
+.thr-hist { position: absolute; left: 7px; right: 7px; top: 0; width: calc(100% - 14px); height: 24px; }
+.thr-hist .is-tree { fill: #c040c0; opacity: 0.75; }
+.thr-hist .not-tree { fill: #556; opacity: 0.6; }
+.thr-track input[type=range] { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; margin: 0; accent-color: #c040c0; cursor: pointer; }
+.thr-scale { display: flex; justify-content: space-between; font-size: 10px; color: #667; margin-top: 2px; }
+.thr-note { font-size: 10.5px; color: #c9a86a; margin-top: 4px; }
+.no-heads-note { font-size: 11px; color: #9ab; background: #141a30; border: 1px solid #2a3456; border-radius: 5px; padding: 6px 8px; margin: 6px 0; line-height: 1.4; }
+.no-heads-note b { color: #cde; }
 .inference-legend { color: #eee; }
 h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .legend-row {

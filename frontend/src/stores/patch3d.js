@@ -26,6 +26,21 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const isWholePatch      = ref(false)
   const hasPrediction     = ref(false)
   const inferenceVersion  = ref('metric')   // model id, see inferenceVersions in CanvasRenderer3D
+  // Threshold slider: P(tree) per point from the last inference run (0..1), the current
+  // threshold and the model's default. dtmExclude marks points too close to the ground
+  // to be trees (never tree, whatever the threshold). predictRequest asks the 3D view
+  // to run inference (used by the panel's button).
+  const treeProbs        = ref(null)    // Float32Array
+  const treeThreshold    = ref(0.5)
+  const defaultThreshold = ref(0.5)
+  const dtmExclude       = ref(null)    // Uint8Array, 1 = forced non-tree
+  const predictRequest   = ref(null)    // { version, at }
+  const thresholdTick    = ref(0)       // bump to redraw tree / non-tree from treeProbs
+  // Inference models (GET /models): id, label, tag, threshold, instance_heads, updated, …
+  const models = ref([
+    { id: 'metric',     label: 'XYZ (m)', tag: 'latest', filename: 'best_model_m.pth',     threshold: 0.55, instance_heads: false },
+    { id: 'metric_old', label: 'XYZ (m)', tag: 'old',    filename: 'best_model_m_old.pth', threshold: 0.75, instance_heads: true },
+  ])
   // [{ label: number, name: string, color: string, count: number }]
   const predictionLegend = ref([])
   // Raw per-point label array from last inference (Int32Array or plain array)
@@ -108,6 +123,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     predictionLegend.value  = []
     inferenceLabels.value   = null
     semanticLabels.value    = null
+    treeProbs.value = null; dtmExclude.value = null; predictRequest.value = null
+    treeThreshold.value = 0.5; defaultThreshold.value = 0.5
     segmentationPeaks.value = []
     segmentationSeedPeaks.value = []
     segmentationRejectedPeaks.value = []
@@ -135,7 +152,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     savedUrl, lassoProcessing, viewMode, lastApplied,
     protectClasses, showAllLabels, baseGround,
     predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
-    inferenceLabels, semanticLabels, inferenceVersion,
+    inferenceLabels, semanticLabels, inferenceVersion, models,
+    treeProbs, treeThreshold, defaultThreshold, dtmExclude, predictRequest, thresholdTick,
     segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks,
     undoResult, groundIndices, dtmGrid, originX, originY, unitCode, unitScale, unitSource, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
