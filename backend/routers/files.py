@@ -18,8 +18,22 @@ import config
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
 
 
+def _clean_folder(folder: str | None) -> str | None:
+    """Folder the file was picked from (its path inside the chosen folder), for grouping."""
+    if not folder:
+        return None
+    parts = [p.strip() for p in folder.replace("\\", "/").split("/") if p.strip() not in ("", ".", "..")]
+    return "/".join(parts)[:200] or None
+
+
 @router.post("/upload", response_model=UploadResponse)
-def upload_file(file: UploadFile = File(...)):
+def upload_file(file: UploadFile = File(...), folder: str | None = Form(None)):
+    # Browsers may send "folder/sub/name.las" for files picked from a folder: keep the
+    # bare name, and the path as the folder if none was given
+    raw = (file.filename or "").replace("\\", "/")
+    if "/" in raw:
+        folder = folder or raw.rsplit("/", 1)[0]
+        file.filename = raw.rsplit("/", 1)[1]
     ext = Path(file.filename).suffix.lower()
     if ext not in (".las", ".laz"):
         raise HTTPException(400, "Only .las and .laz files are supported")
@@ -47,7 +61,7 @@ def upload_file(file: UploadFile = File(...)):
     # Persist original filename + metadata so /info never has to re-read the LAS file
     units = detect_units(dest, meta["bounds"]["x"][0])
     (get_session_dir(session_id) / "meta.json").write_text(
-        __import__("json").dumps({"filename": file.filename, **meta, "units": units})
+        __import__("json").dumps({"filename": file.filename, "folder": _clean_folder(folder), **meta, "units": units})
     )
     try:
         from services import dataset_registry as dreg
@@ -59,6 +73,7 @@ def upload_file(file: UploadFile = File(...)):
     return UploadResponse(
         session_id=session_id,
         filename=file.filename,
+        folder=_clean_folder(folder),
         point_count=meta["point_count"],
         bounds=Bounds(**meta["bounds"]),
         available_fields=meta["available_fields"],
@@ -88,6 +103,7 @@ def get_info(session_id: str):
     return UploadResponse(
         session_id=session_id,
         filename=stored.get("filename", las_path.name),
+        folder=stored.get("folder"),
         point_count=meta["point_count"],
         bounds=Bounds(**meta["bounds"]),
         available_fields=meta["available_fields"],

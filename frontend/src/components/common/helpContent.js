@@ -9,7 +9,7 @@ export const HELP = {
       {
         heading: 'The workflow',
         steps: [
-          '<b>Load</b> a <code>.las</code> / <code>.laz</code> tile — drop it on this page.',
+          '<b>Load</b> <code>.las</code> / <code>.laz</code> files — drop them on this page, or <b>📁 Choose a folder</b> to load a whole folder (it stays grouped).',
           '<b>2D view:</b> draw around an area to cut a <b>patch</b>, then click the patch in the list on the right.',
           '<b>3D view:</b> select each tree with the lasso and give it its own number. Mark ground.',
           '<b>Save</b> (Ctrl+S). The file goes to <code>data/labels</code>, named with the place, patch, your initials and the tree count.',
@@ -53,7 +53,7 @@ export const HELP = {
           '<b>Colour by</b>: elevation, classification, intensity or returns — classification shows buildings and ground nicely.',
           '<b>Whole Patch</b> opens the entire file in 3D (only for small files).',
           '<b>✂ Split</b> cuts a huge file into tiles and downloads them as a ZIP.',
-          'The file list (▼) switches between loaded files and deletes them.',
+          'The file list (▼) switches between loaded files. Files loaded from a folder (📁 button, or drop a folder) are grouped; the folder\'s ✕ deletes all of them, its checkbox selects them.',
           'A yellow units warning means the tool could only guess metres vs feet — check it, heights depend on it.',
         ],
       },

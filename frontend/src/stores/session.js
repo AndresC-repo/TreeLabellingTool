@@ -33,6 +33,7 @@ export const useSessionStore = defineStore('session', () => {
     return {
       sessionId: data.session_id,
       filename: data.filename,
+      folder: data.folder ?? null,    // folder it was loaded from, for grouping
       pointCount: data.point_count,
       bounds: data.bounds,
       availableFields: data.available_fields,

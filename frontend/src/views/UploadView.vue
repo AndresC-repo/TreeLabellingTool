@@ -11,7 +11,7 @@
     <div v-if="session.sessions.length" class="recent">
       <h3>Continue with a loaded file</h3>
       <button
-        v-for="s in session.sessions"
+        v-for="s in grouped.loose"
         :key="s.sessionId"
         class="recent-item"
         @click="open(s)"
@@ -20,21 +20,33 @@
         <span class="recent-name">{{ s.filename }}</span>
         <span class="recent-pts">{{ s.pointCount?.toLocaleString() }} pts</span>
       </button>
+      <details v-for="f in grouped.folders" :key="f.name" class="recent-folder">
+        <summary :title="f.name">
+          <span class="recent-name">📁 {{ f.name }}</span>
+          <span class="recent-pts">{{ f.items.length }} file{{ f.items.length === 1 ? '' : 's' }}</span>
+        </summary>
+        <button v-for="s in f.items" :key="s.sessionId" class="recent-item in-folder" @click="open(s)" :title="`${s.folder}/${s.filename}`">
+          <span class="recent-name">{{ pathInFolder(s) }}</span>
+          <span class="recent-pts">{{ s.pointCount?.toLocaleString() }} pts</span>
+        </button>
+      </details>
     </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import DropZone from '../components/upload/DropZone.vue'
 import HelpButton from '../components/common/HelpButton.vue'
 import { useSessionStore } from '../stores/session.js'
 import { useToastStore } from '../stores/toast.js'
+import { groupByFolder, pathInFolder } from '../utils/uploadCheck.js'
 
 const session = useSessionStore()
 const toast = useToastStore()
 const router = useRouter()
+const grouped = computed(() => groupByFolder(session.sessions))
 
 onMounted(async () => {
   const dropped = await session.init()
@@ -74,4 +86,14 @@ code { color: #7af; }
 .recent-item:hover { background: #3a3a6e; }
 .recent-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-pts { color: #778; flex-shrink: 0; }
+.recent-folder summary {
+  display: flex; align-items: center; gap: 12px; list-style: none;
+  background: #23233f; color: #cde; border: 1px solid #445; border-radius: 8px;
+  padding: 8px 12px; cursor: pointer; font-size: 13px;
+}
+.recent-folder summary::-webkit-details-marker { display: none; }
+.recent-folder summary::before { content: '▸'; color: #889; font-size: 11px; }
+.recent-folder[open] summary::before { content: '▾'; }
+.recent-folder summary:hover { background: #2e2e55; }
+.recent-folder .in-folder { width: calc(100% - 22px); margin: 5px 0 0 22px; }
 </style>

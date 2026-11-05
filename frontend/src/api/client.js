@@ -16,9 +16,11 @@ export function dtmWorldParams(dtmGrid) {
   }
 }
 
-export const uploadFile = (file, onProgress) => {
+export const uploadFile = (file, onProgress, folder = null) => {
   const formData = new FormData()
-  formData.append('file', file)
+  // pass the bare name: for files picked from a folder, browsers send the folder path in it
+  formData.append('file', file, file.name)
+  if (folder) formData.append('folder', folder)
   return api.post('/files/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),

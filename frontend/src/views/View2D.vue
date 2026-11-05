@@ -13,6 +13,9 @@
         {{ loadingFiles ? loadProgress : '⬆ Load' }}
       </button>
       <input ref="fileInput" type="file" accept=".las,.LAS,.laz,.LAZ" multiple style="display:none" @change="onFilesSelected" />
+      <button class="load-btn folder-load" @click.stop="folderInput.click()" :disabled="loadingFiles"
+              title="Load every .las/.laz file in a folder (and its subfolders); they stay grouped by folder">📁</button>
+      <input ref="folderInput" type="file" webkitdirectory multiple style="display:none" @change="onFilesSelected" />
 
       <!-- Split button -->
       <button class="split-btn" @click="splitModal = true" title="Split a large LAS/LAZ into tiles and download as ZIP">✂ Split</button>
@@ -20,7 +23,9 @@
 
       <!-- File dropdown -->
       <div class="file-dropdown" @click.stop>
-        <button class="file-trigger" @click="dropdownOpen = !dropdownOpen" :title="currentFilename">
+        <button class="file-trigger" @click="dropdownOpen = !dropdownOpen"
+                :title="activeEntry?.folder ? `${activeEntry.folder}/${currentFilename}` : currentFilename">
+          <span v-if="activeEntry?.folder" class="trigger-folder">📁 {{ activeEntry.folder }} /</span>
           <span class="trigger-name">{{ currentFilename }}</span>
           <span class="trigger-arrow">{{ dropdownOpen ? '▲' : '▼' }}</span>
         </button>
@@ -43,22 +48,47 @@
             >Delete selected ({{ selectedIds.size }})</button>
           </div>
           <div class="dropdown-list">
+            <!-- Files loaded on their own -->
             <div
-              v-for="s in session.sessions"
+              v-for="s in grouped.loose"
               :key="s.sessionId"
               class="dropdown-item"
               :class="{ active: s.sessionId === route.params.id, selected: selectedIds.has(s.sessionId) }"
             >
-              <input
-                type="checkbox"
-                class="item-check"
-                :checked="selectedIds.has(s.sessionId)"
-                @click="onCheckClick(s, $event)"
-                title="Select (Shift+click for a range)"
-              />
+              <input type="checkbox" class="item-check" :checked="selectedIds.has(s.sessionId)"
+                     @click="onCheckClick(s, $event)" title="Select (Shift+click for a range)" />
               <span class="item-name" @click="switchSession(s)" :title="s.filename">{{ s.filename }}</span>
               <button class="item-remove" @click.stop="requestRemove([s])" :disabled="removing" title="Delete file">&#x2715;</button>
             </div>
+
+            <!-- Folders: collapsible, selectable and deletable as a whole -->
+            <template v-for="f in grouped.folders" :key="'folder:' + f.name">
+              <div class="folder-row" :class="{ open: isFolderOpen(f) }">
+                <button class="folder-toggle" @click="toggleFolder(f.name)" :title="isFolderOpen(f) ? 'Collapse' : 'Expand'">
+                  {{ isFolderOpen(f) ? '▾' : '▸' }}
+                </button>
+                <input type="checkbox" class="item-check" :checked="folderState(f) === 'all'"
+                       :indeterminate.prop="folderState(f) === 'some'" @change="toggleFolderSelection(f)"
+                       title="Select every file in this folder" />
+                <span class="folder-name" @click="toggleFolder(f.name)" :title="f.name">📁 {{ f.name }}</span>
+                <span class="folder-count">{{ f.items.length }}</span>
+                <button class="item-remove" @click.stop="requestRemove(f.items, f.name)" :disabled="removing"
+                        :title="`Delete the folder: all ${f.items.length} files and their patches`">&#x2715;</button>
+              </div>
+              <template v-if="isFolderOpen(f)">
+                <div
+                  v-for="s in f.items"
+                  :key="s.sessionId"
+                  class="dropdown-item in-folder"
+                  :class="{ active: s.sessionId === route.params.id, selected: selectedIds.has(s.sessionId) }"
+                >
+                  <input type="checkbox" class="item-check" :checked="selectedIds.has(s.sessionId)"
+                         @click="onCheckClick(s, $event)" title="Select (Shift+click for a range)" />
+                  <span class="item-name" @click="switchSession(s)" :title="`${s.folder}/${s.filename}`">{{ pathInFolder(s) }}</span>
+                  <button class="item-remove" @click.stop="requestRemove([s])" :disabled="removing" title="Delete file">&#x2715;</button>
+                </div>
+              </template>
+            </template>
           </div>
         </div>
       </div>
@@ -123,7 +153,8 @@
     <div v-if="pendingRemove" class="split-overlay" @click.self="pendingRemove = null">
       <div class="split-box">
         <h3>
-          Delete {{ pendingRemove.entries.length === 1 ? pendingRemove.entries[0].filename : `${pendingRemove.entries.length} files` }}?
+          <template v-if="pendingRemove.folder">Delete folder 📁 {{ pendingRemove.folder }} ({{ pendingRemove.entries.length }} file{{ pendingRemove.entries.length === 1 ? '' : 's' }})?</template>
+          <template v-else>Delete {{ pendingRemove.entries.length === 1 ? pendingRemove.entries[0].filename : `${pendingRemove.entries.length} files` }}?</template>
         </h3>
         <p class="confirm-text">
           <template v-if="pendingRemove.entries.length === 1">
@@ -138,7 +169,7 @@
         </p>
         <ul v-if="pendingRemove.entries.length > 1" class="confirm-list">
           <li v-for="e in pendingRemove.entries" :key="e.sessionId">
-            {{ e.filename }}<span v-if="pendingRemove.counts[e.sessionId]" class="confirm-count"> · {{ pendingRemove.counts[e.sessionId] }} patch{{ pendingRemove.counts[e.sessionId] === 1 ? '' : 'es' }}</span>
+            {{ pathInFolder(e) }}<span v-if="pendingRemove.counts[e.sessionId]" class="confirm-count"> · {{ pendingRemove.counts[e.sessionId] }} patch{{ pendingRemove.counts[e.sessionId] === 1 ? '' : 'es' }}</span>
           </li>
         </ul>
         <div class="split-actions">
@@ -238,7 +269,7 @@ import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
 import { uploadFile, extractPatch, splitFile, deleteSession, getSessionInfo, getRegions, deletePatch } from '../api/client.js'
 import { useToastStore } from '../stores/toast.js'
-import { checkFiles } from '../utils/uploadCheck.js'
+import { checkFiles, itemsFromInput, itemsFromDrop, fileKey, groupByFolder, pathInFolder } from '../utils/uploadCheck.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
 import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
@@ -251,6 +282,7 @@ const store  = useView2DStore()
 const toast  = useToastStore()
 
 const fileInput = ref(null)
+const folderInput = ref(null)
 const loadingFiles = ref(false)
 const loadProgress = ref('')
 const dropdownOpen = ref(false)
@@ -258,7 +290,31 @@ const extractingWhole = ref(false)
 const ready = ref(false)
 const uploadingName = ref('')
 const removing = ref(false)
-const pendingRemove = ref(null)   // { entries, patchCount, counts: { [sessionId]: n } }
+const pendingRemove = ref(null)   // { entries, patchCount, counts: { [sessionId]: n }, folder }
+
+// --- Folders in the file list ---
+const grouped = computed(() => groupByFolder(session.sessions))
+// order on screen (for Shift+click ranges)
+const displayOrder = computed(() => [...grouped.value.loose, ...grouped.value.folders.flatMap(f => f.items)])
+// Folders start collapsed, except the one holding the open file; clicks override that
+const folderOpenChoice = ref({})   // folder name -> true / false
+const isFolderOpen = f => f.name in folderOpenChoice.value
+  ? folderOpenChoice.value[f.name]
+  : f.items.some(s => s.sessionId === route.params.id)
+function toggleFolder(name) {
+  const f = grouped.value.folders.find(x => x.name === name)
+  if (f) folderOpenChoice.value = { ...folderOpenChoice.value, [name]: !isFolderOpen(f) }
+}
+function folderState(f) {
+  const n = f.items.filter(s => selectedIds.value.has(s.sessionId)).length
+  return n === 0 ? 'none' : n === f.items.length ? 'all' : 'some'
+}
+function toggleFolderSelection(f) {
+  const next = new Set(selectedIds.value)
+  const select = folderState(f) !== 'all'
+  for (const s of f.items) select ? next.add(s.sessionId) : next.delete(s.sessionId)
+  selectedIds.value = next
+}
 
 // --- Multi-select in the file list ---
 const selectedIds = ref(new Set())
@@ -276,7 +332,7 @@ function onCheckClick(entry, e) {
   const select = !next.has(entry.sessionId)
   // Shift+click selects/clears everything between the last clicked box and this one
   if (e.shiftKey && lastCheckedId) {
-    const ids = session.sessions.map(s => s.sessionId)
+    const ids = displayOrder.value.map(s => s.sessionId)
     const a = ids.indexOf(lastCheckedId), b = ids.indexOf(entry.sessionId)
     if (a !== -1 && b !== -1) {
       for (const id of ids.slice(Math.min(a, b), Math.max(a, b) + 1)) {
@@ -363,32 +419,36 @@ const tools = [
 ]
 
 function onFilesSelected(e) {
-  const files = Array.from(e.target.files)
+  const items = itemsFromInput(e.target.files)
   e.target.value = ''
-  uploadFiles(files)
+  uploadFiles(items)
 }
 
-async function uploadFiles(files) {
-  if (loadingFiles.value || !files.length) return
+// items: [{ file, folder }] — see utils/uploadCheck.js
+async function uploadFiles(items) {
+  if (loadingFiles.value || !items.length) return
 
-  const { accepted, skipped } = checkFiles(files, session.sessions.map(s => s.filename))
+  const { accepted, skipped } = checkFiles(items, session.sessions.map(s => fileKey(s.folder, s.filename)))
   if (skipped.length) toast.warning(`Skipped ${skipped.join('; ')}`)
-  if (!accepted.length) return
+  if (!accepted.length) {
+    if (!skipped.length) toast.warning('No .las / .laz files found.')
+    return
+  }
 
   loadingFiles.value = true
   const errors = []
   let firstUploaded = null
 
   for (let i = 0; i < accepted.length; i++) {
-    const file = accepted[i]
+    const { file, folder } = accepted[i]
     const pos = accepted.length > 1 ? ` ${i + 1}/${accepted.length}` : ''
-    uploadingName.value = file.name
+    uploadingName.value = folder ? `${folder}/${file.name}` : file.name
     loadProgress.value = `Uploading${pos} · 0%`
     try {
       const res = await uploadFile(file, pct => {
         // After the bytes are sent the server still reads the file and builds its caches
         loadProgress.value = pct >= 100 ? `Processing${pos}…` : `Uploading${pos} · ${pct}%`
-      })
+      }, folder)
       session.addSession(res.data)
       if (!firstUploaded) firstUploaded = res.data
     } catch (err) {
@@ -427,11 +487,11 @@ function onDragLeave(e) {
   dragDepth = Math.max(0, dragDepth - 1)
   if (dragDepth === 0) dragActive.value = false
 }
-function onDrop(e) {
+async function onDrop(e) {
   dragDepth = 0
   dragActive.value = false
   if (!hasFiles(e)) return
-  uploadFiles(Array.from(e.dataTransfer.files))
+  uploadFiles(await itemsFromDrop(e.dataTransfer))   // dropped folders are walked
 }
 
 function switchSession(entry) {
@@ -443,7 +503,7 @@ function switchSession(entry) {
 }
 
 // Ask the server how many patches the files have; confirm only if work would be lost
-async function requestRemove(entries) {
+async function requestRemove(entries, folder = null) {
   if (removing.value || !entries.length) return
   removing.value = true
 
@@ -470,19 +530,19 @@ async function requestRemove(entries) {
   // Deleting several files always asks, so a stray "Delete selected" can't wipe the list
   if (patchCount > 0 || remaining.length > 1) {
     dropdownOpen.value = false
-    pendingRemove.value = { entries: remaining, patchCount, counts }
+    pendingRemove.value = { entries: remaining, patchCount, counts, folder }
   } else {
-    await deleteEntries(remaining)
+    await deleteEntries(remaining, folder)
   }
 }
 
 async function confirmRemove() {
-  const { entries } = pendingRemove.value
+  const { entries, folder } = pendingRemove.value
   pendingRemove.value = null
-  await deleteEntries(entries)
+  await deleteEntries(entries, folder)
 }
 
-async function deleteEntries(entries) {
+async function deleteEntries(entries, folder = null) {
   removing.value = true
   const results = await Promise.allSettled(entries.map(e => deleteSession(e.sessionId)))
   removing.value = false
@@ -496,7 +556,8 @@ async function deleteEntries(entries) {
 
   if (done.length) {
     finishRemove(done.map(e => e.sessionId))
-    toast.info(done.length === 1 ? `Deleted ${done[0].filename}.` : `Deleted ${done.length} files.`)
+    toast.info(folder && done.length === entries.length ? `Deleted folder ${folder} (${done.length} file${done.length === 1 ? '' : 's'}).`
+      : done.length === 1 ? `Deleted ${done[0].filename}.` : `Deleted ${done.length} files.`)
   }
   if (failed.length) toast.error(`Could not delete: ${failed.join(', ')}`)
 }
@@ -668,7 +729,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .file-dropdown { position: relative; }
 .file-trigger {
   display: flex; align-items: center; gap: 8px;
-  max-width: 240px; min-width: 120px;
+  max-width: 360px; min-width: 120px;
   background: #2a2a4e; color: #adf;
   border: 1px solid #445; padding: 5px 10px;
   border-radius: 6px; cursor: pointer; font-size: 13px;
@@ -750,6 +811,15 @@ button:disabled { opacity: 0.6; cursor: default; }
 .item-check { margin-right: 10px; flex-shrink: 0; cursor: pointer; accent-color: #7ab3ff; }
 .select-all input { accent-color: #7ab3ff; }
 .dropdown-item.selected:not(.active) { background: #221f3a; }
+.dropdown-item.in-folder { padding-left: 34px; }
+.folder-row { display: flex; align-items: center; padding: 6px 10px 6px 4px; border-bottom: 1px solid #2a2a4a; background: #171730; }
+.folder-row:hover { background: #1f1f3e; }
+.folder-toggle { background: none; border: none; color: #89a; width: 22px; padding: 0; font-size: 12px; cursor: pointer; }
+.folder-toggle:hover { color: #fff; background: none; }
+.folder-name { flex: 1; font-size: 13px; color: #cde; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-count { font-size: 11px; color: #889; background: #25254a; border-radius: 9px; padding: 0 7px; margin: 0 6px; }
+.trigger-folder { color: #889; margin-right: 4px; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.folder-load { padding-left: 10px; padding-right: 10px; }
 .danger-btn:hover:not(:disabled) { background: #7a3035; }
 .canvas-area { flex: 1; }
 .side-panel {

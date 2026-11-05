@@ -8,10 +8,14 @@
     @click="inputRef.click()"
   >
     <input ref="inputRef" type="file" accept=".las,.LAS,.laz,.LAZ" multiple style="display:none" @change="onFileChange" />
+    <input ref="folderRef" type="file" webkitdirectory multiple style="display:none" @change="onFileChange" />
     <template v-if="!uploading">
       <p class="icon">📂</p>
-      <p>Drop <code>.las</code> / <code>.laz</code> files here or <strong>click to browse</strong></p>
-      <p class="hint">Multiple files supported</p>
+      <p>Drop <code>.las</code> / <code>.laz</code> files or a folder here, or <strong>click to browse</strong></p>
+      <button class="folder-btn" @click.stop="folderRef.click()" title="Load every .las/.laz file in a folder (and its subfolders); they stay grouped by folder">
+        📁 Choose a folder
+      </button>
+      <p class="hint">Files from a folder stay grouped, and the folder can be removed in one go.</p>
     </template>
     <div v-else class="progress-wrap">
       <p class="progress-file">{{ currentFile }}</p>
@@ -32,7 +36,7 @@ import { uploadFile } from '../../api/client.js'
 import { useSessionStore } from '../../stores/session.js'
 import { useRouter } from 'vue-router'
 import { useToastStore } from '../../stores/toast.js'
-import { checkFiles } from '../../utils/uploadCheck.js'
+import { checkFiles, itemsFromInput, itemsFromDrop, fileKey } from '../../utils/uploadCheck.js'
 
 const dragging = ref(false)
 const uploading = ref(false)
@@ -42,6 +46,7 @@ const fileIndex = ref(0)
 const totalFiles = ref(0)
 const error = ref(null)
 const inputRef = ref(null)
+const folderRef = ref(null)
 const session = useSessionStore()
 const router = useRouter()
 const toast = useToastStore()
@@ -49,20 +54,23 @@ const toast = useToastStore()
 async function onDrop(e) {
   if (uploading.value) return
   dragging.value = false
-  await uploadAll(Array.from(e.dataTransfer.files))
+  await uploadAll(await itemsFromDrop(e.dataTransfer))
 }
 
 async function onFileChange(e) {
   if (uploading.value) return
-  const files = Array.from(e.target.files)
+  const items = itemsFromInput(e.target.files)
   e.target.value = ''
-  if (files.length) await uploadAll(files)
+  if (items.length) await uploadAll(items)
 }
 
 async function uploadAll(all) {
-  const { accepted: files, skipped } = checkFiles(all, session.sessions.map(s => s.filename))
+  const { accepted: files, skipped } = checkFiles(all, session.sessions.map(s => fileKey(s.folder, s.filename)))
   if (skipped.length) toast.warning(`Skipped ${skipped.join('; ')}`)
-  if (!files.length) return
+  if (!files.length) {
+    if (!skipped.length) toast.warning('No .las / .laz files found.')
+    return
+  }
 
   uploading.value = true
   error.value = null
@@ -72,10 +80,10 @@ async function uploadAll(all) {
 
   for (let i = 0; i < files.length; i++) {
     fileIndex.value = i
-    currentFile.value = files[i].name
+    currentFile.value = files[i].folder ? `${files[i].folder}/${files[i].file.name}` : files[i].file.name
     progress.value = 0
     try {
-      const res = await uploadFile(files[i], p => { progress.value = p })
+      const res = await uploadFile(files[i].file, p => { progress.value = p }, files[i].folder)
       if (i === 0) {
         session.setSession(res.data)
         firstSessionId = res.data.session_id
@@ -84,7 +92,7 @@ async function uploadAll(all) {
       }
     } catch (err) {
       const detail = err.response?.data?.detail
-      errors.push(detail ? `${files[i].name} (${detail})` : files[i].name)
+      errors.push(detail ? `${files[i].file.name} (${detail})` : files[i].file.name)
     }
   }
 
@@ -117,6 +125,8 @@ async function uploadAll(all) {
 .icon { font-size: 3rem; margin-bottom: 12px; }
 p { color: #aac; line-height: 1.6; }
 .hint { font-size: 12px; color: #667; margin-top: 6px; }
+.folder-btn { margin-top: 12px; background: #1c2440; color: #bcd; border: 1px solid #3a4a6e; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+.folder-btn:hover { background: #26325a; color: #fff; }
 code { color: #7af; font-family: monospace; }
 strong { color: #eee; }
 .progress-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; }

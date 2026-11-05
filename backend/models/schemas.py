@@ -9,6 +9,7 @@ class Bounds(BaseModel):
 class UploadResponse(BaseModel):
     session_id: str
     filename: str
+    folder: Optional[str] = None      # folder it was loaded from (e.g. "Gainesville/tiles"), for grouping
     point_count: int
     bounds: Bounds
     available_fields: List[str]
