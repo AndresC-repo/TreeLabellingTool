@@ -9,7 +9,7 @@ from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelR
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
-from services.projection import elevation_to_rgb
+from services.projection import elevation_to_rgb, robust_z_range
 from services.las_writer import save_labeled_patch
 from services import regions as reg
 from services.units import get_session_units
@@ -35,11 +35,22 @@ def extract(session_id: str, req: ExtractionRequest):
     if req.selection_type not in ("rectangle", "polygon"):
         raise HTTPException(400, "selection_type must be 'rectangle' or 'polygon'")
 
+    noise = None
+    if req.remove_noise:
+        try:
+            from services.renderer2d import z_color_range
+            from services.las_reader import get_las_path
+            z_lo, z_hi = z_color_range(session_id, get_las_path(session_id))
+            noise = {"z_lo": z_lo, "z_hi": z_hi,
+                     "metres_per_unit": get_session_units(session_id)["scale"]}
+        except Exception as e:
+            print(f"[extract] noise filter skipped: {e}")
     result = extract_patch(
         session_id,
         req.selection_type,
         req.bounds_2d,
         req.polygon_2d,
+        noise,
     )
     if result["point_count"] == 0:
         raise HTTPException(400, "No points found in selection")
@@ -69,6 +80,7 @@ def extract(session_id: str, req: ExtractionRequest):
         patch_number=patch_number,
         point_count=result["point_count"],
         bounds_3d=Bounds(**result["bounds_3d"]),
+        noise_removed=sum(result.get("noise_removed", {}).values()),
     )
 
 
@@ -138,7 +150,7 @@ def get_patch_points(session_id: str, patch_id: str):
         # Pass orig_cls separately so protect-classes filtering uses the real ASPRS codes
         # even for patches that were previously saved with custom labels.
         lm.init_patch(patch_id, orig_cls, current_labels=classification)
-    rgb = elevation_to_rgb(z).astype(np.float32)
+    rgb = elevation_to_rgb(z, robust_z_range(z, np.array(las.classification))).astype(np.float32)
     # Original ASPRS classification — always from las.classification (never overwritten by labelling).
     # Sent as field 8 so the frontend can show the original scan structure in "show only <100" mode.
     orig_asprs = np.array(las.classification, dtype=np.float32)

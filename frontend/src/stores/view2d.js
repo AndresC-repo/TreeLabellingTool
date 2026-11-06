@@ -1,8 +1,16 @@
 import { defineStore } from 'pinia'
-import { ref, shallowRef } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
+
+const NOISE_KEY = 'labellingTool.removeNoise'
+function loadRemoveNoise() {
+  try { return localStorage.getItem(NOISE_KEY) !== '0' } catch { return true }
+}
 
 export const useView2DStore = defineStore('view2d', () => {
   const scalarField = ref('elevation')
+  // Drop noise points when cutting a patch (backend services/noise.py). Remembered per browser.
+  const removeNoise = ref(loadRemoveNoise())
+  watch(removeNoise, v => { try { localStorage.setItem(NOISE_KEY, v ? '1' : '0') } catch { /* ignore */ } })
   // 'rectangle' | 'freehand' | 'fixed'
   const activeTool = ref('rectangle')
   // Array of { patch_id, selection_type, bounds_2d?, polygon_2d?, point_count, svgPoints? }
@@ -53,6 +61,7 @@ export const useView2DStore = defineStore('view2d', () => {
 
   return {
     scalarField,
+    removeNoise,
     activeTool,
     labeledRegions,
     activeSelection,

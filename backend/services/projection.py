@@ -72,11 +72,38 @@ def intensity_to_rgb(values: np.ndarray) -> np.ndarray:
     return np.stack([norm, norm, norm], axis=1)
 
 
-def elevation_to_rgb(values: np.ndarray) -> np.ndarray:
-    z_min, z_max = float(values.min()), float(values.max())
-    if z_max == z_min:
+NOISE_CLASSES = (7, 18)   # ASPRS low noise / high noise
+
+
+def robust_z_range(z: np.ndarray, classification: np.ndarray | None = None,
+                   lo_pct: float = 0.5, hi_pct: float = 99.5) -> tuple[float, float]:
+    """Elevation colour range that ignores outliers: the 0.5th-99.5th percentile of Z,
+    without points classified as noise. A few spikes far above the canopy (birds, sensor
+    noise) no longer squash all real heights into one colour; they just get the end colour."""
+    z = np.asarray(z, dtype=np.float32)
+    if classification is not None and len(classification) == len(z):
+        keep = ~np.isin(np.asarray(classification), NOISE_CLASSES)
+        if keep.any():
+            z = z[keep]
+    if len(z) == 0:
+        return 0.0, 1.0
+    if len(z) > 500_000:                       # percentiles of an even sample are plenty
+        z = z[:: len(z) // 500_000]
+    lo, hi = (float(v) for v in np.percentile(z, [lo_pct, hi_pct]))
+    if hi <= lo:
+        lo, hi = float(z.min()), float(z.max())
+    return lo, hi
+
+
+def elevation_to_rgb(values: np.ndarray, z_range: tuple[float, float] | None = None) -> np.ndarray:
+    """Blue (low) -> green -> red (high). z_range defaults to robust_z_range(values);
+    values outside it are clipped to the end colours."""
+    if len(values) == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    z_min, z_max = z_range if z_range is not None else robust_z_range(values)
+    if z_max <= z_min:
         return np.full((len(values), 3), [0.0, 0.5, 1.0], dtype=np.float32)
-    t = (values.astype(np.float32) - z_min) / (z_max - z_min)
+    t = np.clip((values.astype(np.float32) - z_min) / (z_max - z_min), 0.0, 1.0)
     r = np.where(t < 1/3, 0.0, np.where(t < 2/3, (t - 1/3) * 3.0, 1.0)).astype(np.float32)
     g = np.where(t < 1/3, t * 3.0, np.where(t < 2/3, 1.0, 1.0 - (t - 2/3) * 3.0)).astype(np.float32)
     b = np.where(t < 1/3, 1.0 - t * 3.0, 0.0).astype(np.float32)

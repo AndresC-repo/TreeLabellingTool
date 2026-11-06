@@ -24,12 +24,14 @@ class ExtractionRequest(BaseModel):
     selection_type: str  # "rectangle" or "polygon"
     bounds_2d: Optional[Dict[str, float]] = None  # x_min, x_max, y_min, y_max
     polygon_2d: Optional[List[List[float]]] = None  # [[x1,y1], ...]
+    remove_noise: bool = True   # drop noise-classified and isolated extreme points (services/noise.py)
 
 class ExtractionResponse(BaseModel):
     patch_id: str
     patch_number: int
     point_count: int
     bounds_3d: Bounds
+    noise_removed: int = 0      # points dropped as noise
 
 class LabelRequest(BaseModel):
     point_indices: List[int]

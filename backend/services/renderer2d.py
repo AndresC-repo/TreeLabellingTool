@@ -4,7 +4,7 @@ import numpy as np
 from io import BytesIO
 from PIL import Image
 from services.point_cache import get_session_points
-from services.projection import classification_to_rgb, intensity_to_rgb, returns_to_rgb, elevation_to_rgb
+from services.projection import classification_to_rgb, intensity_to_rgb, returns_to_rgb, elevation_to_rgb, robust_z_range
 
 _render_cache: dict = {}  # (session_id, field, width, height, point_size) -> (png_bytes, meta)
 
@@ -13,22 +13,23 @@ MAX_VIEWPORT_POINTS = 8_000_000
 _BG = [26, 26, 46]
 
 
-def _z_range(session_id: str, fallback: np.ndarray) -> tuple[float, float]:
-    """File-wide elevation range, so overview and zoomed renders share one colour scale."""
-    import json
-    from services.las_reader import get_session_dir
-    try:
-        z = json.loads((get_session_dir(session_id) / "meta.json").read_text())["bounds"]["z"]
-        return float(z[0]), float(z[1])
-    except Exception:
-        return float(fallback.min()), float(fallback.max())
+_z_range_cache: dict[str, tuple[float, float]] = {}
+
+
+def z_color_range(session_id: str, las_path) -> tuple[float, float]:
+    """File-wide elevation colour range, so overview and zoomed renders share one scale.
+    Robust to outliers (see robust_z_range); computed once from the decimated sample."""
+    if session_id not in _z_range_cache:
+        data = get_session_points(session_id, las_path)["data"]
+        cls = data.get("classification")
+        # the label dim replaces classification when present: only real ASPRS codes are noise
+        _z_range_cache[session_id] = robust_z_range(data["z"], cls if cls is not None and cls.max() < 256 else None)
+    return _z_range_cache[session_id]
 
 
 def _colorize(scalar_field: str, values: np.ndarray, z_range: tuple[float, float]) -> np.ndarray:
     if scalar_field == "elevation":
-        z0, z1 = z_range
-        # Append the file-wide min/max so elevation_to_rgb normalises to that range
-        rgb_f = elevation_to_rgb(np.concatenate([values.astype(np.float32), [z0, z1]]))[:-2]
+        rgb_f = elevation_to_rgb(values, z_range)
     elif scalar_field == "classification":
         rgb_f = classification_to_rgb(values)
     elif scalar_field == "intensity":
@@ -83,7 +84,7 @@ def render_viewport(
     py = np.clip(((ry1 - y) / (ry1 - ry0) * (height - 1)).astype(np.int32), 0, height - 1)
 
     values = np.asarray(get_field(session_id, las_path, scalar_field)[idx])
-    z_range = _z_range(session_id, values if len(values) else np.zeros(1)) if scalar_field == "elevation" else (0.0, 1.0)
+    z_range = z_color_range(session_id, las_path) if scalar_field == "elevation" else (0.0, 1.0)
     rgb8 = _colorize(scalar_field, values, z_range)
     png_bytes = _rasterize(px, py, rgb8, width, height, point_size)
 
@@ -95,6 +96,7 @@ def render_viewport(
         "bounds": {"xmin": vx0, "xmax": vx1, "ymin": vy0, "ymax": vy1},
         "image_width": width,
         "image_height": height,
+        "z_range": z_range if scalar_field == "elevation" else None,
     }
     return png_bytes, meta
 
@@ -139,7 +141,7 @@ def render_top_view(
 
     scalar_key = "z" if scalar_field == "elevation" else scalar_field
     scalar = data[scalar_key]
-    z_range = _z_range(session_id, scalar) if scalar_field == "elevation" else (0.0, 1.0)
+    z_range = z_color_range(session_id, las_path) if scalar_field == "elevation" else (0.0, 1.0)
     rgb8 = _colorize(scalar_field, scalar, z_range)
     png_bytes = _rasterize(px, py, rgb8, width, height, point_size)
 
@@ -151,6 +153,7 @@ def render_top_view(
         "bounds": {"xmin": xmin, "xmax": xmax, "ymin": ymin, "ymax": ymax},
         "image_width": width,
         "image_height": height,
+        "z_range": z_range if scalar_field == "elevation" else None,
     }
     _render_cache[key] = (png_bytes, meta)
     return png_bytes, meta

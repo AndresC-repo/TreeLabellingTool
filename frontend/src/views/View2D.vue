@@ -103,6 +103,15 @@
           @click="store.activeTool = tool.id"
         >{{ tool.label }}</button>
         <button
+          class="noise-btn"
+          :class="{ active: store.removeNoise }"
+          :disabled="!hasActive"
+          @click="store.removeNoise = !store.removeNoise"
+          :title="store.removeNoise
+            ? 'On: new patches leave out noise — points classified as noise (7, 18) and isolated points far above or below the normal height range. Click to keep every point.'
+            : 'Off: new patches keep every point. Click to leave out noise.'"
+        >🧹 Noise: {{ store.removeNoise ? 'removed' : 'kept' }}</button>
+        <button
           class="whole-btn"
           :disabled="extractingWhole || !hasActive"
           @click="loadWholePatch"
@@ -588,6 +597,7 @@ async function loadWholePatch() {
     const bounds = entry.bounds
     const res = await extractPatch(sessionId, {
       selection_type: 'rectangle',
+      remove_noise: store.removeNoise,
       bounds_2d: {
         x_min: bounds.x[0],
         x_max: bounds.x[1],
@@ -595,7 +605,8 @@ async function loadWholePatch() {
         y_max: bounds.y[1],
       },
     })
-    const { patch_id, patch_number } = res.data
+    const { patch_id, patch_number, noise_removed } = res.data
+    if (noise_removed) toast.info(`Removed ${noise_removed.toLocaleString()} noise point${noise_removed === 1 ? '' : 's'}.`)
     router.push(`/session/${sessionId}/patch/${patch_id}?n=${patch_number}&whole=1`)
   } catch (err) {
     console.error('Whole patch extraction failed:', err)
@@ -699,6 +710,8 @@ async function saveSplitZip() {
   flex-shrink: 0;
 }
 .tool-group { display: flex; gap: 6px; margin-left: auto; }
+.noise-btn { color: #99a; }
+.tool-group .noise-btn.active { background: #1f3a2c; border-color: #3c7a55; color: #9e9; }
 .whole-btn {
   background: #2a3a5e;
   border-color: #4a6aae;

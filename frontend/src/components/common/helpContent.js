@@ -52,6 +52,7 @@ export const HELP = {
         bullets: [
           '<b>Colour by</b>: elevation, classification, intensity or returns — classification shows buildings and ground nicely.',
           '<b>Whole Patch</b> opens the entire file in 3D (only for small files).',
+          '<b>🧹 Noise: removed</b> (default) leaves noise out of new patches: points the file marks as noise, and lone points far above or below everything else. Click it to keep every point.',
           '<b>✂ Split</b> cuts a huge file into tiles and downloads them as a ZIP.',
           'The file list (▼) switches between loaded files. Files loaded from a folder (📁 button, or drop a folder) are grouped; the folder\'s ✕ deletes all of them, its checkbox selects them.',
           'A yellow units warning means the tool could only guess metres vs feet — check it, heights depend on it.',

@@ -117,7 +117,9 @@ def get_2d_image(
             "X-Bounds-YMax": str(b["ymax"]),
             "X-Image-Width": str(meta["image_width"]),
             "X-Image-Height": str(meta["image_height"]),
-            "Access-Control-Expose-Headers": "X-Point-Count,X-Decimation-Ratio,X-Bounds-XMin,X-Bounds-XMax,X-Bounds-YMin,X-Bounds-YMax,X-Image-Width,X-Image-Height",
+            # elevation colour scale (blue → red), outliers clipped; empty for other fields
+            "X-Z-Range": ",".join(f"{v:.3f}" for v in meta["z_range"]) if meta.get("z_range") else "",
+            "Access-Control-Expose-Headers": "X-Point-Count,X-Decimation-Ratio,X-Bounds-XMin,X-Bounds-XMax,X-Bounds-YMin,X-Bounds-YMax,X-Image-Width,X-Image-Height,X-Z-Range",
         },
     )
 

@@ -33,6 +33,7 @@ def extract_patch(
     selection_type: str,
     bounds_2d: Optional[dict],
     polygon_2d: Optional[list],
+    noise: Optional[dict] = None,   # {z_lo, z_hi, metres_per_unit}: drop noise points (services/noise.py)
 ) -> dict:
     las_path = get_las_path(session_id)
     cache_path, offsets_path = get_xy_cache_paths(session_id)
@@ -46,13 +47,13 @@ def extract_patch(
         if cache_path.exists() and offsets_path.exists():
             return _extract_cached(
                 las_path, cache_path, offsets_path, patch_path, patch_id,
-                selection_type, bounds_2d, polygon_2d,
+                selection_type, bounds_2d, polygon_2d, noise,
             )
     except Exception:
         pass  # corrupt/incomplete cache — fall through to legacy
 
     return _extract_legacy(
-        las_path, patch_path, patch_id, selection_type, bounds_2d, polygon_2d,
+        las_path, patch_path, patch_id, selection_type, bounds_2d, polygon_2d, noise,
     )
 
 
@@ -61,6 +62,7 @@ def extract_patch(
 def _extract_cached(
     las_path, cache_path, offsets_path, patch_path, patch_id,
     selection_type, bounds_2d, polygon_2d,
+    noise=None,
 ) -> dict:
     offsets = np.load(str(offsets_path))
     x_off, y_off = float(offsets[0]), float(offsets[1])
@@ -97,7 +99,7 @@ def _extract_cached(
     if not raw_all:
         return _empty(patch_id)
 
-    return _write_patch(patch_id, patch_path, src_header, raw_all)
+    return _write_patch(patch_id, patch_path, src_header, raw_all, noise)
 
 
 def _compute_mask(xy, x_off, y_off, selection_type, bounds_2d, polygon_2d) -> np.ndarray:
@@ -132,6 +134,7 @@ def _compute_mask(xy, x_off, y_off, selection_type, bounds_2d, polygon_2d) -> np
 
 def _extract_legacy(
     las_path, patch_path, patch_id, selection_type, bounds_2d, polygon_2d,
+    noise=None,
 ) -> dict:
     raw_all = []   # full point records (every dimension, incl. extra bytes)
 
@@ -180,12 +183,12 @@ def _extract_legacy(
     if not raw_all:
         return _empty(patch_id)
 
-    return _write_patch(patch_id, patch_path, src_header, raw_all)
+    return _write_patch(patch_id, patch_path, src_header, raw_all, noise)
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
-def _write_patch(patch_id, patch_path, src_header, raw_all) -> dict:
+def _write_patch(patch_id, patch_path, src_header, raw_all, noise=None) -> dict:
     """Write the selected points with EVERY dimension of the source file.
 
     The header (scales, offsets, VLRs incl. the CRS, extra-bytes definitions such as
@@ -197,6 +200,15 @@ def _write_patch(patch_id, patch_path, src_header, raw_all) -> dict:
     points = laspy.ScaleAwarePointRecord(
         np.concatenate(raw_all), header.point_format, header.scales, header.offsets,
     )
+    removed = {"classified": 0, "outliers": 0}
+    if noise:
+        from services.noise import noise_mask
+        drop, removed = noise_mask(points.x, points.y, points.z, points.classification,
+                                   noise["z_lo"], noise["z_hi"], noise.get("metres_per_unit", 1.0))
+        if drop.all():
+            return _empty(patch_id)
+        if drop.any():
+            points = points[~drop]
     new_las = laspy.LasData(header, points=points)
     # Patches are always stored uncompressed (.las) even if the source was .laz
     new_las.write(str(patch_path), do_compress=False)
@@ -218,6 +230,7 @@ def _write_patch(patch_id, patch_path, src_header, raw_all) -> dict:
             "z": [float(z.min()), float(z.max())],
         },
         "classification": full_labels,
+        "noise_removed": removed,
     }
 
 

@@ -27,6 +27,12 @@
       </template>
       <span v-if="refining" class="dim"> · refining…</span>
     </div>
+    <div v-if="zRange && (store.scalarField || 'elevation') === 'elevation' && !loadError" class="z-legend"
+         title="Elevation colours run over this range. It ignores the lowest and highest 0.5% of heights and points classified as noise, so a few extreme points can't flatten the colours; points outside it get the end colour.">
+      <span>{{ zRange[0].toFixed(1) }}</span>
+      <span class="z-bar"></span>
+      <span>{{ zRange[1].toFixed(1) }}</span>
+    </div>
     <div v-if="extractError" class="extract-error" @click="extractError = null">{{ extractError }}</div>
     <div class="point-size-ctrl">
       <button @click="changePointSize(-1)" :disabled="pointSize <= 1">−</button>
@@ -75,6 +81,7 @@
 </template>
 
 <script setup>
+import { useToastStore } from '../../stores/toast.js'
 import { ref, shallowRef, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useView2DStore } from '../../stores/view2d.js'
@@ -92,6 +99,8 @@ const canvasRef = ref(null)
 const loading = ref(false)
 const pointCount = ref(0)
 const decimationRatio = ref(1)
+const toast = useToastStore()
+const zRange = ref(null)   // [lo, hi] of the elevation colours (X-Z-Range)
 const extractError = ref(null)
 
 const loadError = ref(null)
@@ -240,6 +249,8 @@ async function loadField(field, { keepView = false } = {}) {
     const newH = parseInt(h['x-image-height'] ?? '2048')
     pointCount.value      = parseInt(h['x-point-count']       ?? '0')
     decimationRatio.value = parseFloat(h['x-decimation-ratio'] ?? '1')
+    const zr = (h['x-z-range'] || '').split(',').map(Number)
+    zRange.value = zr.length === 2 && zr.every(Number.isFinite) ? zr : null
     const img = await blobToImage(res.data)
     if (token !== overviewToken) { URL.revokeObjectURL(img.src); return }
     if (currentImage) URL.revokeObjectURL(currentImage.src)
@@ -441,10 +452,13 @@ async function onSvgContextMenu(e) {
 
 async function doExtract(selectionType, bounds2d, polygon2d) {
   try {
-    const payload = { selection_type: selectionType }
+    const payload = { selection_type: selectionType, remove_noise: store.removeNoise }
     if (bounds2d)  payload.bounds_2d  = bounds2d
     if (polygon2d) payload.polygon_2d = polygon2d
     const res = await extractPatch(sessionId, payload)
+    if (res.data.noise_removed) {
+      toast.info(`patch_${res.data.patch_number}: removed ${res.data.noise_removed.toLocaleString()} noise point${res.data.noise_removed === 1 ? '' : 's'}.`)
+    }
     store.addRegion({
       patch_id:       res.data.patch_id,
       patch_number:   res.data.patch_number,
@@ -473,6 +487,12 @@ async function doExtract(selectionType, bounds2d, polygon2d) {
   transform: translate(-50%, -50%);
   color: #adf; font-size: 1.1rem; pointer-events: none;
 }
+.z-legend {
+  position: absolute; top: 38px; right: 12px; display: flex; align-items: center; gap: 6px;
+  background: rgba(0,0,0,0.6); color: #aab; padding: 3px 10px; border-radius: 8px;
+  font: 11px ui-monospace, monospace; cursor: help;
+}
+.z-bar { width: 90px; height: 7px; border-radius: 3px; background: linear-gradient(90deg, #0000ff, #00ff00 33%, #ffff00 67%, #ff0000 100%); }
 .info-badge {
   position: absolute; top: 10px; right: 12px;
   background: rgba(0,0,0,0.6); color: #cce;
