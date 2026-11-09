@@ -176,7 +176,8 @@ def get_patch_points(session_id: str, patch_id: str):
             "X-Unit-Code": units["code"],
             "X-Unit-Scale": repr(units["scale"]),
             "X-Unit-Source": units["source"],
-            "Access-Control-Expose-Headers": "X-Point-Count, X-Origin-X, X-Origin-Y, X-Unit-Code, X-Unit-Scale, X-Unit-Source",
+            "X-Unit-Crs": units.get("crs_code") or "",     # units of the file's coordinate system
+            "Access-Control-Expose-Headers": "X-Point-Count, X-Origin-X, X-Origin-Y, X-Unit-Code, X-Unit-Scale, X-Unit-Source, X-Unit-Crs",
         },
     )
 
@@ -252,6 +253,8 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
             min_crown_cells=req.min_crown_cells,
             min_peak_height=req.min_peak_height,
             min_crown_area=req.min_crown_area,
+            min_tree_spacing=req.min_tree_spacing,
+            understory_gap=req.understory_gap,
             return_stats=True,
             unit_scale=get_session_units(session_id)["scale"],
             dtm_grid=req.dtm_grid,
@@ -450,6 +453,36 @@ def run_prediction_instances(
     return {"labels": labels.tolist(), "n_instances": n_inst}
 
 
+MAX_PLAUSIBLE_TREE_M = 45.0   # taller "trees" usually mean feet read as metres
+
+
+def _units_problems(patch_path, labels, units: dict) -> list[str]:
+    """Reasons the units of an export look wrong (empty list = fine):
+    units contradicting the file's coordinate system, or trees implausibly tall in metres."""
+    from services.units import UNITS
+    problems = []
+    crs = units.get("crs_code")
+    if crs and crs != units["code"]:
+        problems.append(f"The file's coordinate system is in {UNITS[crs]['name']}, but the units "
+                        f"are set to {units['name']} (changed by hand).")
+    try:
+        las = laspy.read(str(patch_path))
+        z = np.asarray(las.z, dtype=np.float64)
+        lab = np.asarray(labels)
+        tree = lab >= 100
+        if tree.any() and len(z) == len(lab):
+            cls = np.asarray(las.classification)
+            ground = z[cls == 2] if (cls == 2).sum() >= 20 else z
+            base = float(np.percentile(ground, 5))
+            top_m = (float(np.percentile(z[tree], 99.5)) - base) * units["scale"]
+            if top_m > MAX_PLAUSIBLE_TREE_M:
+                problems.append(f"Trees reach about {top_m:.0f} m above the ground with these units — "
+                                f"more than {MAX_PLAUSIBLE_TREE_M:.0f} m usually means feet are being read as metres.")
+    except Exception as e:
+        print(f"[save] height check skipped: {e}")
+    return problems
+
+
 def ensure_label_state(session_id: str, patch_id: str):
     """Labels of a patch, loading them from its file if they aren't in memory yet
     (after a backend restart, or a file just opened from the dataset page)."""
@@ -526,6 +559,12 @@ def save_patch(session_id: str, patch_id: str, req: SaveRequest):
         safe_name += ".las"
 
     units = get_session_units(session_id)
+    if not req.confirm_units:
+        problems = _units_problems(patch_path, labels, units)
+        if problems:
+            # the Save panel shows these and offers "Save anyway" (confirm_units=True)
+            raise HTTPException(409, {"code": "units_check", "problems": problems,
+                                      "units": units["code"], "crs": units.get("crs_code")})
     saved_to = None
     root, connected = dreg.dataset_root()
     if req.to_labels:
@@ -644,7 +683,16 @@ async def restore_patch_from_client(session_id: str, patch_id: str, request: Req
     patch_dir.mkdir(parents=True, exist_ok=True)
     patch_path = patch_dir / f"{patch_id}.las"
 
-    new_las = laspy.LasData(header=laspy.LasHeader(point_format=0))
+    header = laspy.LasHeader(point_format=0)
+    try:   # keep the coordinate system (and scales/offsets) of the original file
+        from services.las_reader import get_las_path
+        with laspy.open(str(get_las_path(session_id))) as f:
+            header = laspy.LasHeader(point_format=0, version=f.header.version)
+            header.scales, header.offsets = f.header.scales, f.header.offsets
+            header.vlrs = [v for v in f.header.vlrs if getattr(v, "user_id", "") == "LASF_Projection"]
+    except Exception as e:
+        print(f"[restore] original header unavailable: {e}")
+    new_las = laspy.LasData(header=header)
     new_las.x = x
     new_las.y = y
     new_las.z = z
@@ -690,27 +738,11 @@ def delete_patch_points(session_id: str, patch_id: str, req: DeletePointsRequest
     for i in delete_set:
         keep[i] = False
 
-    # Build new LAS preserving all standard and extra dimensions
-    new_header = laspy.LasHeader(point_format=las.header.point_format, version=las.header.version)
-    new_las = laspy.LasData(header=new_header)
-    new_las.x = las.x[keep]
-    new_las.y = las.y[keep]
-    new_las.z = las.z[keep]
-    new_las.classification = las.classification[keep]
-
-    # Copy intensity if present
-    try:
-        new_las.intensity = las.intensity[keep]
-    except Exception:
-        pass
-
-    # Copy extra dimensions (e.g. 'label' field written by save_labeled_patch)
-    for dim_name in las.point_format.extra_dimension_names:
-        try:
-            setattr(new_las, dim_name, getattr(las, dim_name)[keep])
-        except Exception:
-            pass
-
+    # Keep the header (CRS and other VLRs, scales/offsets) and every point dimension
+    # (returns, GPS time, colour, extra dims): only drop the deleted points. Building a
+    # fresh header here used to lose the coordinate system, so the export's units could
+    # no longer be checked against it.
+    new_las = laspy.LasData(las.header, points=las.points[keep].copy())
     new_las.write(str(patch_path))
 
     # Re-initialise label manager with surviving point labels

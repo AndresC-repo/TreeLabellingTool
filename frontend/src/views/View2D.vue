@@ -157,37 +157,8 @@
     </div>
   </div>
 
-  <!-- Delete confirmation -->
-  <teleport to="body">
-    <div v-if="pendingRemove" class="split-overlay" @click.self="pendingRemove = null">
-      <div class="split-box">
-        <h3>
-          <template v-if="pendingRemove.folder">Delete folder 📁 {{ pendingRemove.folder }} ({{ pendingRemove.entries.length }} file{{ pendingRemove.entries.length === 1 ? '' : 's' }})?</template>
-          <template v-else>Delete {{ pendingRemove.entries.length === 1 ? pendingRemove.entries[0].filename : `${pendingRemove.entries.length} files` }}?</template>
-        </h3>
-        <p class="confirm-text">
-          <template v-if="pendingRemove.entries.length === 1">
-            This file has <strong>{{ pendingRemove.patchCount }}</strong>
-            {{ pendingRemove.patchCount === 1 ? 'patch' : 'patches' }} on the server.
-          </template>
-          <template v-else>
-            Together they have <strong>{{ pendingRemove.patchCount }}</strong>
-            {{ pendingRemove.patchCount === 1 ? 'patch' : 'patches' }} on the server.
-          </template>
-          Deleting removes the files, their patches and any saved outputs you haven't downloaded.
-        </p>
-        <ul v-if="pendingRemove.entries.length > 1" class="confirm-list">
-          <li v-for="e in pendingRemove.entries" :key="e.sessionId">
-            {{ pathInFolder(e) }}<span v-if="pendingRemove.counts[e.sessionId]" class="confirm-count"> · {{ pendingRemove.counts[e.sessionId] }} patch{{ pendingRemove.counts[e.sessionId] === 1 ? '' : 'es' }}</span>
-          </li>
-        </ul>
-        <div class="split-actions">
-          <button @click="pendingRemove = null">Cancel</button>
-          <button class="danger-btn" @click="confirmRemove">Delete</button>
-        </div>
-      </div>
-    </div>
-  </teleport>
+  <!-- Delete confirmation (files / folders) -->
+  <RemoveFilesDialog :pending="pendingRemove" @cancel="pendingRemove = null" @confirm="confirmRemove" />
 
   <!-- Patch delete confirmation (only for labelled patches) -->
   <teleport to="body">
@@ -205,70 +176,8 @@
     </div>
   </teleport>
 
-  <!-- Split modal -->
-  <teleport to="body">
-    <div v-if="splitModal" class="split-overlay" @click.self="splitStage === 'idle' && (splitModal = false)">
-      <div class="split-box">
-        <h3>Split LAS / LAZ into tiles</h3>
-
-        <!-- Stage: idle — pick file + tile count -->
-        <template v-if="splitStage === 'idle'">
-          <div class="split-row">
-            <label>File</label>
-            <input type="file" accept=".las,.LAS,.laz,.LAZ" @change="onSplitFileSelected" />
-          </div>
-          <div class="split-row">
-            <label>Tiles</label>
-            <select v-model="splitNTiles">
-              <option :value="4">4 tiles  (2 × 2)</option>
-              <option :value="8">8 tiles  (2 × 4)</option>
-              <option :value="16">16 tiles (4 × 4)</option>
-              <option :value="32">32 tiles (4 × 8)</option>
-            </select>
-          </div>
-          <p v-if="splitSelectedFile" class="split-filename">📄 {{ splitSelectedFile.name }}</p>
-          <div class="split-actions">
-            <button @click="splitModal = false">Cancel</button>
-            <button class="split-go" :disabled="!splitSelectedFile" @click="doSplit">Upload & Split</button>
-          </div>
-        </template>
-
-        <!-- Stage: uploading -->
-        <template v-else-if="splitStage === 'uploading'">
-          <p class="split-status">⬆ Uploading file…</p>
-          <div class="split-progress-bar">
-            <div class="split-progress-fill" :style="{ width: splitUploadPct + '%' }"></div>
-          </div>
-          <p class="split-pct">{{ splitUploadPct }}%</p>
-        </template>
-
-        <!-- Stage: splitting -->
-        <template v-else-if="splitStage === 'splitting'">
-          <p class="split-status">⚙ Server is splitting tiles…</p>
-          <div class="split-progress-bar indeterminate"><div class="split-progress-fill indeterminate-bar"></div></div>
-          <p class="split-hint">This may take a moment for large files.</p>
-        </template>
-
-        <!-- Stage: ready -->
-        <template v-else-if="splitStage === 'ready'">
-          <p class="split-status success">✅ Done! {{ splitTileCount }} tiles ready.</p>
-          <div class="split-actions">
-            <button @click="splitReset">Close</button>
-            <button class="split-go" @click="saveSplitZip">💾 Save ZIP…</button>
-          </div>
-        </template>
-
-        <!-- Stage: saved -->
-        <template v-else-if="splitStage === 'saved'">
-          <p class="split-status success">✅ Done! ZIP saved.</p>
-          <div class="split-actions">
-            <button @click="splitReset">Close</button>
-          </div>
-        </template>
-
-      </div>
-    </div>
-  </teleport>
+  <!-- Split a large file into tiles -->
+  <SplitDialog v-model:open="splitModal" />
 </template>
 
 <script setup>
@@ -276,7 +185,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '../stores/session.js'
 import { useView2DStore } from '../stores/view2d.js'
-import { uploadFile, extractPatch, splitFile, deleteSession, getSessionInfo, getRegions, deletePatch } from '../api/client.js'
+import { uploadFile, extractPatch, getRegions, deletePatch } from '../api/client.js'
+import SplitDialog from '../components/common/SplitDialog.vue'
+import RemoveFilesDialog from '../components/common/RemoveFilesDialog.vue'
+import { useRemoveFiles } from '../composables/useRemoveFiles.js'
 import { useToastStore } from '../stores/toast.js'
 import { checkFiles, itemsFromInput, itemsFromDrop, fileKey, groupByFolder, pathInFolder } from '../utils/uploadCheck.js'
 import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
@@ -298,8 +210,11 @@ const dropdownOpen = ref(false)
 const extractingWhole = ref(false)
 const ready = ref(false)
 const uploadingName = ref('')
-const removing = ref(false)
-const pendingRemove = ref(null)   // { entries, patchCount, counts: { [sessionId]: n }, folder }
+// Deleting files / folders (shared with the start page)
+const { removing, pendingRemove, requestRemove, confirmRemove } = useRemoveFiles({
+  onRemoved: ids => finishRemove(ids),
+  onAsk: () => { dropdownOpen.value = false },
+})
 
 // --- Folders in the file list ---
 const grouped = computed(() => groupByFolder(session.sessions))
@@ -512,68 +427,8 @@ function switchSession(entry) {
 }
 
 // Ask the server how many patches the files have; confirm only if work would be lost
-async function requestRemove(entries, folder = null) {
-  if (removing.value || !entries.length) return
-  removing.value = true
-
-  const counts = {}
-  const alreadyGone = []
-  await Promise.all(entries.map(async e => {
-    try {
-      counts[e.sessionId] = (await getSessionInfo(e.sessionId)).data.patch_count ?? 0
-    } catch (err) {
-      if (err.response?.status === 404) alreadyGone.push(e)
-      else counts[e.sessionId] = 1   // can't tell (backend unreachable) → make the user confirm
-    }
-  }))
-  removing.value = false
-
-  if (alreadyGone.length) {
-    finishRemove(alreadyGone.map(e => e.sessionId))
-    toast.info(`${alreadyGone.map(e => e.filename).join(', ')} ${alreadyGone.length === 1 ? 'was' : 'were'} already removed from the server.`)
-  }
-  const remaining = entries.filter(e => e.sessionId in counts)
-  if (!remaining.length) return
-
-  const patchCount = remaining.reduce((n, e) => n + counts[e.sessionId], 0)
-  // Deleting several files always asks, so a stray "Delete selected" can't wipe the list
-  if (patchCount > 0 || remaining.length > 1) {
-    dropdownOpen.value = false
-    pendingRemove.value = { entries: remaining, patchCount, counts, folder }
-  } else {
-    await deleteEntries(remaining, folder)
-  }
-}
-
-async function confirmRemove() {
-  const { entries, folder } = pendingRemove.value
-  pendingRemove.value = null
-  await deleteEntries(entries, folder)
-}
-
-async function deleteEntries(entries, folder = null) {
-  removing.value = true
-  const results = await Promise.allSettled(entries.map(e => deleteSession(e.sessionId)))
-  removing.value = false
-
-  const done = [], failed = []
-  results.forEach((r, i) => {
-    // 404 = already gone on the server → still remove locally
-    if (r.status === 'fulfilled' || r.reason?.response?.status === 404) done.push(entries[i])
-    else failed.push(`${entries[i].filename} (${r.reason?.response?.data?.detail || r.reason?.message || 'unknown error'})`)
-  })
-
-  if (done.length) {
-    finishRemove(done.map(e => e.sessionId))
-    toast.info(folder && done.length === entries.length ? `Deleted folder ${folder} (${done.length} file${done.length === 1 ? '' : 's'}).`
-      : done.length === 1 ? `Deleted ${done[0].filename}.` : `Deleted ${done.length} files.`)
-  }
-  if (failed.length) toast.error(`Could not delete: ${failed.join(', ')}`)
-}
-
-function finishRemove(ids) {
+function finishRemove(ids) {   // the entries are already out of the session list
   const wasActive = ids.includes(route.params.id)
-  for (const id of ids) session.removeSession(id)
   selectedIds.value = new Set([...selectedIds.value].filter(id => !ids.includes(id)))
   dropdownOpen.value = false
   if (!wasActive) return
@@ -615,81 +470,8 @@ async function loadWholePatch() {
   }
 }
 
-// --- Split feature ---
-const splitModal    = ref(false)
-const splitNTiles   = ref(4)
-const splitSelectedFile = ref(null)
-const splitStage    = ref('idle')   // 'idle' | 'uploading' | 'splitting' | 'ready'
-const splitUploadPct = ref(0)
-const splitZipBlob  = ref(null)
-const splitZipName  = ref('')
-const splitTileCount = ref(0)
-
-function onSplitFileSelected(e) {
-  splitSelectedFile.value = e.target.files[0] || null
-}
-
-function splitReset() {
-  splitModal.value    = false
-  splitStage.value    = 'idle'
-  splitSelectedFile.value = null
-  splitZipBlob.value  = null
-  splitUploadPct.value = 0
-  splitTileCount.value = 0
-}
-
-async function doSplit() {
-  if (!splitSelectedFile.value) return
-  splitZipName.value = splitSelectedFile.value.name.replace(/\.[^.]+$/, '') + '.zip'
-  splitStage.value   = 'uploading'
-  splitUploadPct.value = 0
-  try {
-    const res = await splitFile(
-      splitSelectedFile.value,
-      splitNTiles.value,
-      pct => {
-        splitUploadPct.value = pct
-        if (pct >= 100) splitStage.value = 'splitting'
-      }
-    )
-    // Count tiles from ZIP (use Content-Disposition or just store nTiles)
-    splitZipBlob.value  = res.data
-    splitTileCount.value = splitNTiles.value   // exact count from server isn't exposed; close enough
-    splitStage.value    = 'ready'
-  } catch (err) {
-    splitStage.value = 'idle'
-    toast.error('Split failed: ' + (err.message || 'unknown error'))
-  }
-}
-
-async function saveSplitZip() {
-  const blob = splitZipBlob.value
-  if (!blob) return
-  try {
-    if (window.showSaveFilePicker) {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: splitZipName.value,
-        types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
-      })
-      const writable = await handle.createWritable()
-      await writable.write(blob)
-      await writable.close()
-    } else {
-      // Fallback: browser-chosen downloads folder
-      const url = URL.createObjectURL(blob)
-      const a   = document.createElement('a')
-      a.href    = url
-      a.download = splitZipName.value
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    }
-    splitStage.value = 'saved'
-  } catch (err) {
-    if (err.name !== 'AbortError') toast.error('Save failed: ' + err.message)
-  }
-}
+// --- Split feature (components/common/SplitDialog.vue) ---
+const splitModal = ref(false)
 
 </script>
 

@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 
+export const UNIT_NAMES = { m: 'metres', ftUS: 'US survey feet', ft: 'feet' }
+export const UNIT_SCALE = { m: 1, ftUS: 1200 / 3937, ft: 0.3048 }
+
 export const usePatch3DStore = defineStore('patch3d', () => {
   const patchId = ref(null)
   const patchNumber = ref(1)
@@ -70,7 +73,9 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const unitCode   = ref('m')
   const unitScale  = ref(1)
   const unitSource = ref('default')   // crs | guess | default | user
+  const unitCrs    = ref(null)        // units of the file's coordinate system (null = none)
   const dtmGrid = ref(null)  // { grid: float[], rows, cols, xMin, yMin, xRange, yRange }
+  const heightMode = ref(false)  // hover a point → its height above the ground (📏, key H)
 
   // Z bounds of the loaded patch — for elevation filter slider
   const zBoundsMin = ref(0)
@@ -134,7 +139,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     dtmGrid.value = null
     originX.value = 0
     originY.value = 0
-    unitCode.value = 'm'; unitScale.value = 1; unitSource.value = 'default'
+    unitCode.value = 'm'; unitScale.value = 1; unitSource.value = 'default'; unitCrs.value = null
     zBoundsMin.value = 0
     zBoundsMax.value = 0
     elevFilterMin.value = 0
@@ -157,7 +162,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     inferenceLabels, semanticLabels, inferenceVersion, models,
     treeProbs, treeThreshold, defaultThreshold, dtmExclude, predictRequest, thresholdTick,
     segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks,
-    undoResult, groundIndices, dtmGrid, originX, originY, unitCode, unitScale, unitSource, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    undoResult, groundIndices, dtmGrid, heightMode, originX, originY, unitCode, unitScale, unitSource, unitCrs, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
     xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive, clipHover,
     addAppliedLabel, reset,

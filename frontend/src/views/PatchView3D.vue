@@ -126,6 +126,10 @@ function onKeyDown(e) {
     case 'L':
       store.viewMode = 'classification'
       break
+    case 'h':
+    case 'H':
+      store.heightMode = !store.heightMode
+      break
     case 'i':
     case 'I':
       renderer3d.value?.runPrediction(store.inferenceVersion || 'metric')   // last used model

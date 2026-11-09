@@ -274,6 +274,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
         code:   res.headers['x-unit-code'] ?? 'm',
         scale:  parseFloat(res.headers['x-unit-scale'] ?? '1') || 1,
         source: res.headers['x-unit-source'] ?? 'default',
+        crs:    res.headers['x-unit-crs'] || null,   // units of the file's coordinate system
       }
       pointCount.value = count
       elevationColors = colors.slice()

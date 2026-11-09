@@ -102,6 +102,57 @@ def _fill_nearest(grid: np.ndarray, fallback: float) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _split_understory(labels, x, y, z, hat, gap, min_height, min_points, link_radius):
+    """Split trees standing under another tree's crown.
+
+    The canopy-height watershed sees the trees from above, so a small tree under a big
+    crown ends up in the big tree. Here every tree's points are sorted by height above
+    the ground; where there is an empty vertical layer of at least `gap`, the points
+    below it are taken out, grouped by horizontal distance (link_radius), and every group
+    with at least `min_points` points becomes its own tree. Smaller groups (trunk hits,
+    a few branch returns) stay with the tree above. Repeated for the new trees, so
+    several layers are handled. All distances in data units.
+
+    Returns (labels, [[x, y, z] of each new tree's top]).
+    """
+    from scipy.spatial import cKDTree
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    labels = labels.copy()
+    next_id = int(labels.max()) + 1 if (labels >= 201).any() else 201
+    new_tops = []
+    queue = [int(t) for t in np.unique(labels[labels >= 201])]
+    while queue:
+        tid = queue.pop()
+        idx = np.flatnonzero((labels == tid) & (hat >= min_height))
+        if len(idx) < min_points + 1:
+            continue
+        order = np.argsort(hat[idx], kind="stable")
+        hs = hat[idx][order]
+        gaps = np.flatnonzero(np.diff(hs) >= gap)          # split after position k
+        # the highest gap that leaves enough points below it: everything above is the crown
+        split = next((k for k in gaps[::-1] if k + 1 >= min_points and len(hs) - k - 1 >= min_points), None)
+        if split is None:
+            continue
+        lower = idx[order[: split + 1]]
+        pts = np.column_stack([x[lower], y[lower]])
+        pairs = cKDTree(pts).query_pairs(link_radius, output_type="ndarray")
+        n = len(lower)
+        graph = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(n, n)) if len(pairs) \
+            else coo_matrix((n, n))
+        n_comp, comp = connected_components(graph, directed=False)
+        sizes = np.bincount(comp, minlength=n_comp)
+        for c in np.flatnonzero(sizes >= min_points):
+            members = lower[comp == c]
+            labels[members] = next_id
+            top = members[np.argmax(z[members])]
+            new_tops.append([float(x[top]), float(y[top]), float(z[top])])
+            queue.append(next_id)          # it may have a layer below it too
+            next_id += 1
+    return labels, new_tops
+
+
 def segment_tree_instances(
     x: np.ndarray,
     y: np.ndarray,
@@ -123,6 +174,9 @@ def segment_tree_instances(
     min_crown_area: float | None = None,
     # Minimum distance between tree tops in metres; overrides min_distance (cells).
     min_tree_spacing: float | None = None,
+    # Understorey split: a tree whose points have an empty vertical layer of at least this
+    # many metres is split there; the lower part becomes its own tree(s). 0 = off.
+    understory_gap: float = 0.0,
     # When True, a 5th value is returned: a dict describing what each step did.
     return_stats: bool = False,
     # Metres per coordinate unit (1.0 = metres, 0.3048006 = US survey feet). All distance
@@ -189,6 +243,7 @@ def segment_tree_instances(
         "trees": 0,
         "warning": None,
         "rejected_peaks": [],
+        "understory_trees": 0,            # trees split off below another crown
     }
 
     _hat = [None]   # per-point height above terrain, set once the terrain is known
@@ -465,14 +520,34 @@ def segment_tree_instances(
             print(f"[tree_segmentor] merged to {len(valid_basin_ids_orig)} valid instances")
 
     new_labels[tree_mask] = instance_ids
-    tree_count = int(np.unique(instance_ids[instance_ids > 0]).size)
+
+    # ── Understorey: trees under another crown (vertical gap) ─────────────────
+    if understory_gap and understory_gap > 0:
+        new_labels, under_peaks = _split_understory(
+            new_labels, x, y, z, hat,
+            gap=understory_gap / us,
+            min_height=min_height,
+            min_points=max(20, int(min_tree_points) // 4),
+            link_radius=1.5 / us,
+        )
+        stats["understory_trees"] = len(under_peaks)
+        if under_peaks:
+            extra = np.asarray(under_peaks, dtype=np.float64)
+            seed_peaks_out = np.vstack([seed_peaks_out, extra])
+            under_rows = list(range(len(seed_peaks_out) - len(extra), len(seed_peaks_out)))
+        else:
+            under_rows = []
+    else:
+        under_rows = []
+
+    tree_count = int(np.unique(new_labels[new_labels >= 201]).size)
 
     # Final valid peaks (subset of seed_peaks_out)
     # basin_ids and seed_peaks_out are in the same order
     basin_id_to_idx = {int(bid): i for i, bid in enumerate(basin_ids)}
     valid_idx = [basin_id_to_idx[bid] for bid in valid_peak_basin_ids
                  if bid in basin_id_to_idx]
-    peaks_out = seed_peaks_out[valid_idx] if valid_idx else seed_peaks_out[:1]
+    peaks_out = seed_peaks_out[valid_idx + under_rows] if valid_idx or under_rows else seed_peaks_out[:1]
 
     print(f"[tree_segmentor] {tree_count} tree instances (Duncanson watershed)")
     return _done(new_labels, tree_count, peaks_out, seed_peaks_out)

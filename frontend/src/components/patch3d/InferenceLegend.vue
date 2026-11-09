@@ -159,13 +159,28 @@
         <div v-if="paramsOpen" class="params-grid">
           <!-- Data units: all params are metres; backend converts to the file's units -->
           <label class="param-row units-row" :title="unitTitle">
-            <span class="param-name">Data units <span class="unit-src" :class="store.unitSource">{{ unitSourceLabel }}</span></span>
-            <select class="param-input unit-select" :value="store.unitCode" :disabled="unitSaving" @change="changeUnits($event.target.value)">
+            <span class="param-name">Data units <span class="unit-src" :class="unitConflict ? 'conflict' : store.unitSource">{{ unitConflict ? 'contradicts file' : unitSourceLabel }}</span></span>
+            <select class="param-input unit-select" :value="store.unitCode" :disabled="unitSaving" @change="changeUnits($event.target.value, $event)">
               <option value="m">metres</option>
               <option value="ftUS">US survey ft</option>
               <option value="ft">int. feet</option>
             </select>
           </label>
+          <!-- The file's CRS states its units: changing them needs an explicit confirmation -->
+          <div v-if="pendingUnits" class="units-confirm">
+            The file's coordinate system is in <b>{{ UNIT_NAMES[store.unitCrs] }}</b>. Using {{ UNIT_NAMES[pendingUnits] }}
+            makes every height and distance {{ unitFactor(pendingUnits) }}, and saved patches would be tagged {{ UNIT_NAMES[pendingUnits] }}.
+            <div class="units-actions">
+              <button class="keep" @click="pendingUnits = null">Keep {{ UNIT_NAMES[store.unitCrs] }}</button>
+              <button class="override" @click="changeUnits(pendingUnits, null, true)">Override anyway</button>
+            </div>
+          </div>
+          <div v-else-if="unitConflict" class="units-confirm">
+            Set by hand to <b>{{ UNIT_NAMES[store.unitCode] }}</b>, but the file says {{ UNIT_NAMES[store.unitCrs] }}.
+            <div class="units-actions">
+              <button class="keep" @click="changeUnits(store.unitCrs)">Use {{ UNIT_NAMES[store.unitCrs] }}</button>
+            </div>
+          </div>
           <!-- DTM source indicator -->
           <div class="dtm-badge" :class="dtmSource === 'external' ? 'dtm-ok' : 'dtm-fallback'">
             <span class="dtm-icon">{{ dtmSource === 'external' ? '✓' : '!' }}</span>
@@ -208,6 +223,10 @@
             <span class="param-name" title="Isolated canopy patches smaller than this area (m²) are treated as noise and become non-tree. Independent of cell size. 0 = off.">Min blob area (m²)</span>
             <input v-model.number="params.min_crown_area" type="number" min="0" step="1" class="param-input" />
           </label>
+          <label class="param-row">
+            <span class="param-name" title="Finds trees standing under another tree's crown, which the top-down canopy map can't see. If a tree's points have an empty height layer at least this tall, the points below it become their own tree(s) — groups of at least a quarter of Min pts / tree (min. 20). 0 = off.">Understory gap (m)</span>
+            <input v-model.number="params.understory_gap" type="number" min="0" max="30" step="0.5" class="param-input" />
+          </label>
         </div>
 
         <button
@@ -240,6 +259,10 @@
           <div class="seg-row" title="Maxima rejected by Min peak height (grey dots)">
             <span>Below min peak height</span>
             <span>{{ segStats.peaks_below_peak_height }}</span>
+          </div>
+          <div v-if="segStats.understory_trees" class="seg-row" title="Trees found under another crown via the Understory gap">
+            <span>Understory trees split off</span>
+            <span>{{ segStats.understory_trees }}</span>
           </div>
           <div class="seg-row" title="Basins with fewer than Min pts / tree, merged into neighbours">
             <span>Small basins merged</span>
@@ -322,6 +345,7 @@ import { ref, computed, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
 import { applyLabelsBulk, segmentTrees, getTreeMetrics, predictInstances, predictPatch, dtmWorldParams, setUnits } from '../../api/client.js'
+import { UNIT_NAMES, UNIT_SCALE } from '../../stores/patch3d.js'
 
 const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-applied'])
 
@@ -382,6 +406,7 @@ const params = reactive({
   min_tree_points:  300,
   // Was "min_crown_cells: 70": at 1.5 m cells that is 157 m², which deleted most isolated trees
   min_crown_area:   5,
+  understory_gap:   3,
 })
 
 // What each segmentation step did (from the backend), shown under the button
@@ -389,20 +414,33 @@ const segStats = ref(null)
 
 // ── Data units ──
 const unitSaving = ref(false)
-const unitSourceLabel = computed(() => ({ crs: 'from file', guess: 'guessed', user: 'set by you', default: 'assumed', uncertain: 'uncertain — check' })[store.unitSource] ?? '')
+const pendingUnits = ref(null)   // override waiting for confirmation
+const unitConflict = computed(() => !!store.unitCrs && store.unitCode !== store.unitCrs)
+const unitFactor = code => {
+  const f = UNIT_SCALE[store.unitCrs] / UNIT_SCALE[code]
+  return f >= 1 ? `${f.toFixed(2)}× too small` : `${(1 / f).toFixed(2)}× too big`
+}
+const unitSourceLabel = computed(() => ({ crs: 'from file 🔒', guess: 'guessed', user: 'set by you', default: 'assumed', uncertain: 'uncertain — check' })[store.unitSource] ?? '')
 const unitTitle = computed(() =>
-  store.unitSource === 'crs'   ? 'Read from the coordinate system stored in the LAS file.' :
+  store.unitSource === 'crs'   ? 'Read from the coordinate system stored in the LAS file. Changing it needs a confirmation.' :
   store.unitSource === 'guess' ? 'The file has no coordinate system. Coordinates look like US state plane in feet — change this if wrong.' :
   store.unitSource === 'user'  ? 'Set manually for this file.' :
   store.unitSource === 'uncertain' ? 'No coordinate system, and read as metres the point density would be implausibly low (< 4 pts/m²). The data may be in feet. Metres are assumed until you choose; exports carry no units marker until then.' :
   'The file has no coordinate system; metres assumed. Change this if the data is in feet.')
 
-async function changeUnits(code) {
-  if (code === store.unitCode) return
+async function changeUnits(code, ev = null, force = false) {
+  if (code === store.unitCode) { pendingUnits.value = null; return }
+  if (!force && store.unitCrs && code !== store.unitCrs) {
+    pendingUnits.value = code                       // ask first
+    if (ev) ev.target.value = store.unitCode
+    return
+  }
+  pendingUnits.value = null
   unitSaving.value = true
   try {
-    const res = await setUnits(route.params.id, code)
+    const res = await setUnits(route.params.id, code, force)
     store.unitCode = res.data.code; store.unitScale = res.data.scale; store.unitSource = res.data.source
+    store.unitCrs = res.data.crs_code ?? store.unitCrs
     instanceMessage.value = `Units set to ${res.data.name} — run segmentation again.`
   } catch (err) {
     console.error('Setting units failed:', err)
@@ -621,6 +659,13 @@ async function applyToLabels() {
 </script>
 
 <style scoped>
+.unit-src.conflict { color: #ff8a7a; }
+.units-confirm { font-size: 11px; line-height: 1.45; color: #ecc; background: #2a1820; border: 1px solid #6a3440; border-radius: 5px; padding: 6px 8px; margin: 2px 0 6px; }
+.units-confirm b { color: #fff; }
+.units-actions { display: flex; gap: 6px; margin-top: 6px; }
+.units-actions button { font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; border: 1px solid #556; background: #223; color: #cde; }
+.units-actions .keep { border-color: #3c7a55; background: #1f3a2c; color: #9e9; }
+.units-actions .override { border-color: #7a3c44; background: #3a1f24; color: #f99; }
 .thr { margin: 8px 0 10px; padding: 8px 9px 6px; background: #121830; border: 1px solid #263052; border-radius: 6px; }
 .thr-head { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #aab; }
 .thr-head b { color: #fff; font-variant-numeric: tabular-nums; }

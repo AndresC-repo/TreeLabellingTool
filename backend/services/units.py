@@ -14,6 +14,8 @@ Detection order:
      (metres assumed but flagged in the UI; exports carry no units marker)
   4. Otherwise metres                                                  -> source "default"
 The user can override it per file                                      -> source "user"
+...but not silently against the file's CRS: that needs force=True (UnitsConflict otherwise),
+and exports re-check it (routers/patches.py save_patch).
 """
 from __future__ import annotations
 import json
@@ -124,32 +126,67 @@ def describe(units: dict) -> dict:
     return out
 
 
+class UnitsConflict(ValueError):
+    """Requested units contradict the units of the file's coordinate system."""
+    def __init__(self, crs_code: str, requested: str):
+        self.crs_code, self.requested = crs_code, requested
+        super().__init__(f"The file's coordinate system is in {UNITS[crs_code]['name']}; "
+                         f"setting {UNITS[requested]['name']} would contradict it.")
+
+
+def _crs_code(session_id: str, meta: dict) -> str | None:
+    """Units of the file's own CRS (None if it has none). Cached in meta.json as crs_units."""
+    if "crs_units" not in meta:
+        from services.las_reader import get_las_path
+        las_path = get_las_path(session_id)
+        code = None
+        if las_path.exists():
+            try:
+                with laspy.open(str(las_path)) as f:
+                    code = _from_geokeys(f.header) or _from_wkt(f.header)
+            except Exception:
+                code = None
+        meta["crs_units"] = code or ""
+    return meta["crs_units"] or None
+
+
 def get_session_units(session_id: str) -> dict:
-    """Units for a session (detected once and cached in meta.json)."""
+    """Units for a session (detected once and cached in meta.json), plus crs_code: the
+    units of the file's coordinate system, or None."""
     from services.las_reader import get_session_dir, get_las_path
     meta_path = get_session_dir(session_id) / "meta.json"
     try:
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
     except (OSError, ValueError):
         meta = {}
+    changed = False
     if "units" not in meta:
         las_path = get_las_path(session_id)
         if not las_path.exists():
-            return describe({"code": "m", "source": "default"})
+            return {**describe({"code": "m", "source": "default"}), "crs_code": None}
         meta["units"] = detect_units(las_path)
+        changed = True
+    if "crs_units" not in meta:
+        _crs_code(session_id, meta)
+        changed = True
+    if changed:
         try:
             meta_path.write_text(json.dumps(meta))
         except OSError:
             pass
-    return describe(meta["units"])
+    return {**describe(meta["units"]), "crs_code": meta["crs_units"] or None}
 
 
-def set_session_units(session_id: str, code: str) -> dict:
+def set_session_units(session_id: str, code: str, force: bool = False) -> dict:
     from services.las_reader import get_session_dir
     if code not in UNITS:
         raise ValueError(f"units must be one of {list(UNITS)}")
     meta_path = get_session_dir(session_id) / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-    meta["units"] = {"code": code, "source": "user"}
+    crs = _crs_code(session_id, meta)
+    if crs and code != crs and not force:
+        raise UnitsConflict(crs, code)
+    # choosing the CRS's own units puts it back to "from file"
+    meta["units"] = {"code": code, "source": "crs" if code == crs else "user"}
     meta_path.write_text(json.dumps(meta))
-    return describe(meta["units"])
+    return {**describe(meta["units"]), "crs_code": crs}

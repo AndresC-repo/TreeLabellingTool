@@ -31,6 +31,25 @@
       Labels folder not connected — the file is kept inside Docker. See README / docker-compose.
     </p>
 
+    <!-- Units the file will be tagged with — what the training importer trusts -->
+    <p class="units-line" :class="{ bad: unitConflict }"
+       :title="'The saved file is tagged with these units; the training importer converts to metres from them.'">
+      Units: <b>{{ UNIT_NAMES[patchStore.unitCode] }}</b>
+      <span class="dim">({{ unitConflict ? 'set by hand — the file says ' + UNIT_NAMES[patchStore.unitCrs] : unitSrc }})</span>
+      <button v-if="unitConflict" class="fix-units" @click="useFileUnits">Use {{ UNIT_NAMES[patchStore.unitCrs] }}</button>
+    </p>
+
+    <!-- Export check failed: say why, offer the fix or saving anyway -->
+    <div v-if="unitsProblems.length" class="units-check">
+      <p class="uc-title">⚠ The units look wrong for this patch:</p>
+      <ul><li v-for="p in unitsProblems" :key="p">{{ p }}</li></ul>
+      <div class="uc-actions">
+        <button v-if="unitConflict" class="fix-units" @click="useFileUnits(true)">Use {{ UNIT_NAMES[patchStore.unitCrs] }} and save</button>
+        <button class="anyway" @click="saveAnyway">Save anyway</button>
+        <button class="cancel" @click="unitsProblems = []">Cancel</button>
+      </div>
+    </div>
+
     <button @click="save" :disabled="saving" class="save-btn" title="Save [Ctrl+S]">
       {{ saving ? 'Saving...' : 'Save as .las' }} <kbd>Ctrl+S</kbd>
     </button>
@@ -47,10 +66,10 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
-import { savePatch, getDownloadUrl, restoreFromClient, getExportName, updateDatasetSource } from '../../api/client.js'
+import { ref, watch, onMounted, computed } from 'vue'
+import { savePatch, getDownloadUrl, restoreFromClient, getExportName, updateDatasetSource, setUnits } from '../../api/client.js'
 import { useRoute } from 'vue-router'
-import { usePatch3DStore } from '../../stores/patch3d.js'
+import { usePatch3DStore, UNIT_NAMES } from '../../stores/patch3d.js'
 import { getPatchCache } from '../../composables/pointCloudCache.js'
 import { useToastStore } from '../../stores/toast.js'
 
@@ -120,8 +139,29 @@ async function tryRestorePatch() {
   }
 }
 
-async function doSave() {
-  const res = await savePatch(route.params.id, route.params.patchId, customName.value ? filename.value : null, toLabels.value)
+// ── Units ──
+const unitsProblems = ref([])
+const unitConflict = computed(() => !!patchStore.unitCrs && patchStore.unitCode !== patchStore.unitCrs)
+const unitSrc = computed(() => ({ crs: 'from the file', guess: 'guessed', user: 'set by you', default: 'assumed',
+  uncertain: 'uncertain — check', export: 'from an earlier export' })[patchStore.unitSource] ?? patchStore.unitSource)
+async function useFileUnits(thenSave = false) {
+  try {
+    const res = await setUnits(route.params.id, patchStore.unitCrs)
+    patchStore.unitCode = res.data.code; patchStore.unitScale = res.data.scale; patchStore.unitSource = res.data.source
+    toast.info(`Units set to ${res.data.name}.`)
+    if (thenSave === true) { unitsProblems.value = []; await save() }
+  } catch (err) {
+    error.value = 'Could not change units — see console'
+    console.error(err)
+  }
+}
+async function saveAnyway() {
+  unitsProblems.value = []
+  await save(true)
+}
+
+async function doSave(confirmUnits = false) {
+  const res = await savePatch(route.params.id, route.params.patchId, customName.value ? filename.value : null, toLabels.value, confirmUnits)
   lastSaved.value = res.data
   downloadUrl.value = getDownloadUrl(route.params.id, route.params.patchId)
   customName.value = false
@@ -131,13 +171,17 @@ async function doSave() {
     : `Saved ${res.data.output_filename}`)
 }
 
-async function save() {
+async function save(confirmUnits = false) {
   saving.value = true
   error.value = null
   try {
-    await doSave()
+    await doSave(confirmUnits === true)
+    unitsProblems.value = []
   } catch (err) {
-    if (err.response?.status === 404) {
+    const detail = err.response?.data?.detail
+    if (err.response?.status === 409 && detail?.code === 'units_check') {
+      unitsProblems.value = detail.problems
+    } else if (err.response?.status === 404) {
       error.value = 'Recovering patch data from browser…'
       const recovered = await tryRestorePatch()
       if (recovered) {
@@ -152,7 +196,8 @@ async function save() {
         error.value = 'Server lost patch file and browser cache is empty — please reload the page'
       }
     } else {
-      error.value = err.response?.data?.detail || 'Save failed'
+      const d = err.response?.data?.detail
+      error.value = (typeof d === 'string' ? d : d?.message) || 'Save failed'
     }
   } finally {
     saving.value = false
@@ -163,6 +208,19 @@ async function save() {
 <style scoped>
 .save-panel { color: #eee; }
 h3 { color: #adf; margin-bottom: 12px; font-size: 14px; font-weight: 600; }
+.units-line { font-size: 11.5px; color: #9ab; margin: 0 0 8px; }
+.units-line b { color: #dde; font-weight: 600; }
+.units-line.bad { color: #ff9a8a; }
+.units-line.bad b { color: #ffb4a8; }
+.fix-units { margin-left: 6px; font-size: 11px; padding: 2px 8px; border-radius: 4px; cursor: pointer; border: 1px solid #3c7a55; background: #1f3a2c; color: #9e9; }
+.units-check { font-size: 11.5px; color: #ecc; background: #2a1820; border: 1px solid #6a3440; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.units-check .uc-title { font-weight: 600; color: #ffb4a8; margin-bottom: 4px; }
+.units-check ul { padding-left: 16px; display: flex; flex-direction: column; gap: 3px; }
+.uc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.uc-actions button { font-size: 11px; padding: 3px 9px; border-radius: 4px; cursor: pointer; }
+.uc-actions .fix-units { margin-left: 0; }
+.uc-actions .anyway { border: 1px solid #7a3c44; background: #3a1f24; color: #f99; }
+.uc-actions .cancel { border: 1px solid #445; background: #223; color: #aab; }
 input {
   width: 100%;
   background: #2a2a4e; color: #eee;

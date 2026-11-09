@@ -1,5 +1,6 @@
 <template>
-  <div ref="container" class="canvas3d" @mousemove="onHoverMove" @mouseleave="hoverInfo = null">
+  <div ref="container" class="canvas3d" :class="{ 'height-mode': store.heightMode }"
+       @mousemove="onHoverMove" @mouseleave="hoverInfo = null; clearHeightProbe()">
     <div v-if="loading" class="loading">Loading patch...</div>
     <LassoOverlay
       :drawing="lasso.drawing.value"
@@ -99,6 +100,14 @@
         <button @click="setTopView"  title="Top view [T]">&#9651; Top <kbd>T</kbd></button>
         <button @click="setSideView" title="Side view [S]">&#9654; Side <kbd>S</kbd></button>
       </div>
+
+      <!-- Height above ground on hover -->
+      <div class="btn-group">
+        <button :class="{ active: store.heightMode }" @click="store.heightMode = !store.heightMode"
+                title="Hover a point to see its height above the ground below it, in metres [H]">
+          📏 Height <kbd>H</kbd>
+        </button>
+      </div>
     </div>
     <!-- No ground points warning (DTM / CHM mode) -->
     <div
@@ -128,6 +137,14 @@
       class="hover-label-tip"
       :style="{ left: hoverInfo.x + 'px', top: hoverInfo.y + 'px' }"
     >{{ hoverInfo.text }}</div>
+    <!-- Height probe (📏) -->
+    <div v-if="heightTip" class="height-tip" :style="{ left: heightTip.x + 'px', top: heightTip.y + 'px' }">
+      <template v-if="heightTip.metres != null">
+        <b>{{ heightTip.metres.toFixed(1) }} m</b> above ground
+        <span v-if="store.unitCode !== 'm'" class="sub">{{ heightTip.units.toFixed(1) }} {{ store.unitCode }}</span>
+      </template>
+      <template v-else>No ground points to measure from — label ground (class 2) first</template>
+    </div>
   </div>
 </template>
 
@@ -656,7 +673,7 @@ onMounted(async () => {
     store.originX = result.origin?.x ?? 0
     store.originY = result.origin?.y ?? 0
     if (result.units) {
-      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source
+      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source; store.unitCrs = result.units.crs ?? null
     }
     store.groundIndices = result.groundIndices ?? []
     store.zBoundsMin = result.zMin ?? 0
@@ -738,7 +755,94 @@ function _labelName(lbl) {
   return _ASPRS_NAMES[lbl] ?? `Label ${lbl}`
 }
 
+// ── Height probe (📏): height of the hovered point above the ground model (DTM) ──
+const heightTip = ref(null)
+let probe = null          // THREE.Group: dot on the point + line down to the ground
+let _probeThrottle = null
+
+// Ground elevation at (x, y): bilinear between the DTM cell centres
+function groundAt(x, y) {
+  const d = store.dtmGrid
+  if (!d) return null
+  const { grid, rows, cols, xMin, yMin, xRange, yRange } = d
+  const u = Math.max(0, Math.min(cols - 1, (x - xMin) / xRange * cols - 0.5))
+  const v = Math.max(0, Math.min(rows - 1, (y - yMin) / yRange * rows - 0.5))
+  const c0 = Math.floor(u), r0 = Math.floor(v)
+  const c1 = Math.min(cols - 1, c0 + 1), r1 = Math.min(rows - 1, r0 + 1)
+  const fu = u - c0, fv = v - r0
+  const g = (r, c) => grid[r * cols + c]
+  return (g(r0, c0) * (1 - fu) + g(r0, c1) * fu) * (1 - fv) + (g(r1, c0) * (1 - fu) + g(r1, c1) * fu) * fv
+}
+
+// points hidden by the Z filter or the clip box can't be picked
+function pointVisible(x, y, z) {
+  if (store.viewMode === 'elevation' && (z < store.elevFilterMin || z > store.elevFilterMax)) return false
+  if (store.clipActive && (x < store.xClipMin || x > store.xClipMax || y < store.yClipMin ||
+      y > store.yClipMax || z < store.zClipMin || z > store.zClipMax)) return false
+  return true
+}
+
+function clearHeightProbe() {
+  heightTip.value = null
+  if (probe) probe.visible = false
+}
+
+function showProbe(x, y, z, g) {
+  if (!scene.value) return
+  if (!probe) {
+    probe = new THREE.Group()
+    const dot = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3)),
+      new THREE.PointsMaterial({ color: 0xffffff, size: 9, sizeAttenuation: false, depthTest: false }))
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3)),
+      new THREE.LineBasicMaterial({ color: 0xffe066, depthTest: false }))
+    dot.renderOrder = line.renderOrder = 20
+    probe.add(line, dot)
+    scene.value.add(probe)
+  }
+  const [line, dot] = probe.children
+  const gz = g ?? z
+  dot.geometry.attributes.position.array.set([x, y, z, x, y, gz])   // the point and its ground foot
+  dot.geometry.attributes.position.needsUpdate = true
+  line.geometry.attributes.position.array.set([x, y, z, x, y, gz])
+  line.geometry.attributes.position.needsUpdate = true
+  line.visible = g != null
+  probe.visible = true
+}
+
+function probeHeight(e) {
+  const mesh = getPointsMesh()
+  if (!mesh || !camera.value || !renderer.value) { clearHeightProbe(); return }
+  if (_probeThrottle) return
+  _probeThrottle = requestAnimationFrame(() => { _probeThrottle = null })
+
+  const rect = renderer.value.domElement.getBoundingClientRect()
+  _hoverRaycaster.setFromCamera(
+    { x: ((e.clientX - rect.left) / rect.width) * 2 - 1, y: -((e.clientY - rect.top) / rect.height) * 2 + 1 },
+    camera.value)
+  const camDist = camera.value.position.distanceTo(controls?.target ?? camera.value.position)
+  _hoverRaycaster.params.Points = { threshold: camDist * 0.003 }
+  const pos = getPositions()
+  const hit = _hoverRaycaster.intersectObject(mesh).find(h =>
+    pointVisible(pos[h.index * 3], pos[h.index * 3 + 1], pos[h.index * 3 + 2]))
+  if (!hit) { clearHeightProbe(); return }
+
+  const i = hit.index
+  const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2]
+  const g = groundAt(x, y)
+  const units = g == null ? null : z - g
+  const cRect = container.value.getBoundingClientRect()
+  heightTip.value = {
+    x: e.clientX - cRect.left + 16, y: e.clientY - cRect.top + 16,
+    units, metres: units == null ? null : units * (store.unitScale || 1),
+  }
+  showProbe(x, y, z, g)
+}
+watch(() => store.heightMode, on => { if (!on) clearHeightProbe() })
+
 function onHoverMove(e) {
+  if (store.heightMode) { hoverInfo.value = null; probeHeight(e); return }
   const mode = store.viewMode
   const isInference     = mode === 'prediction' || mode === 'inference-chm'
   const isClassification = mode === 'classification'
@@ -797,7 +901,7 @@ async function reloadPatch() {
     store.originX = result.origin?.x ?? 0
     store.originY = result.origin?.y ?? 0
     if (result.units) {
-      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source
+      store.unitCode = result.units.code; store.unitScale = result.units.scale; store.unitSource = result.units.source; store.unitCrs = result.units.crs ?? null
     }
     store.groundIndices = result.groundIndices ?? []
     store.zBoundsMin = result.zMin ?? 0; store.zBoundsMax = result.zMax ?? 0
@@ -919,6 +1023,15 @@ defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPr
   background: rgba(0,0,0,0.3);
 }
 
+.canvas3d.height-mode { cursor: crosshair; }
+.height-tip {
+  position: absolute; pointer-events: none; z-index: 30;
+  background: rgba(16, 18, 36, 0.92); color: #dde; border: 1px solid #5a5a2a;
+  border-radius: 6px; padding: 4px 9px; font-size: 12px; white-space: nowrap;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+.height-tip b { color: #ffe066; font-size: 14px; }
+.height-tip .sub { color: #889; margin-left: 6px; font-size: 11px; }
 .hover-label-tip {
   position: absolute; pointer-events: none; z-index: 30;
   background: rgba(10, 14, 30, 0.88);

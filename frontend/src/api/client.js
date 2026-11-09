@@ -30,7 +30,8 @@ export const uploadFile = (file, onProgress, folder = null) => {
 export const getSessionInfo = sessionId => api.get(`/files/${sessionId}/info`)
 
 // units: "m" | "ftUS" | "ft" — overrides the detected linear units of a file
-export const setUnits = (sessionId, units) => api.post(`/files/${sessionId}/units`, { units })
+// force: allow units that contradict the file's coordinate system (409 otherwise)
+export const setUnits = (sessionId, units, force = false) => api.post(`/files/${sessionId}/units`, { units, force })
 
 export const deleteSession = sessionId => api.delete(`/files/${sessionId}`)
 
@@ -69,8 +70,9 @@ export const getNextLabel = (sessionId, patchId) =>
 
 // outputFilename null/empty = automatic name (<city or state>_<tile>_p<n>_t<trees>.las)
 // toLabels: also write into the training labels folder (urban-tree-detection/data/labels)
-export const savePatch = (sessionId, patchId, outputFilename = null, toLabels = true) =>
-  api.post(`/patches/${sessionId}/${patchId}/save`, { output_filename: outputFilename || null, to_labels: toLabels })
+// confirmUnits: save even if the units checks complain (409 code "units_check" otherwise)
+export const savePatch = (sessionId, patchId, outputFilename = null, toLabels = true, confirmUnits = false) =>
+  api.post(`/patches/${sessionId}/${patchId}/save`, { output_filename: outputFilename || null, to_labels: toLabels, confirm_units: confirmUnits })
 
 export const getExportName = (sessionId, patchId) =>
   api.get(`/patches/${sessionId}/${patchId}/export-name`)
@@ -146,13 +148,16 @@ export const restoreFromClient = (sessionId, patchId, buffer, origin = { x: 0, y
 export const deletePoints = (sessionId, patchId, pointIndices) =>
   api.post(`/patches/${sessionId}/${patchId}/delete-points`, { point_indices: pointIndices })
 
-export const splitFile = (file, nTiles, onProgress) => {
+// load=false: ZIP of the tiles (blob). load=true: tiles loaded into the tool as a folder
+// → { folder, tiles: [upload responses] }
+export const splitFile = (file, nTiles, onProgress, load = false) => {
   const formData = new FormData()
-  formData.append('file', file)
+  formData.append('file', file, file.name)
   formData.append('n_tiles', nTiles)
+  formData.append('load', load ? 'true' : 'false')
   return api.post('/files/split', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    responseType: 'blob',
+    responseType: load ? 'json' : 'blob',
     onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
   })
 }

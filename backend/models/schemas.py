@@ -19,6 +19,7 @@ class UploadResponse(BaseModel):
 
 class UnitsRequest(BaseModel):
     units: str   # "m" | "ftUS" | "ft"
+    force: bool = False   # allow units that contradict the file's coordinate system
 
 class ExtractionRequest(BaseModel):
     selection_type: str  # "rectangle" or "polygon"
@@ -49,6 +50,7 @@ class BulkLabelRequest(BaseModel):
 class SaveRequest(BaseModel):
     output_filename: Optional[str] = None   # None/empty = automatic name
     to_labels: bool = True                  # also write into the training labels folder
+    confirm_units: bool = False             # save even if the units checks complain
 
 class SaveResponse(BaseModel):
     download_url: str
@@ -72,6 +74,12 @@ class SegmentTreesRequest(BaseModel):
     min_peak_height: Optional[float] = None
     # Blob filter as an area (m²); when set it replaces min_crown_cells
     min_crown_area: Optional[float] = None
+    # Minimum distance between tree tops (m); when set it replaces min_distance (cells).
+    # (Was missing here, so the panel's value was silently ignored.)
+    min_tree_spacing: Optional[float] = None
+    # Split off trees standing under another crown: a vertical gap of at least this many
+    # metres with no points separates them. 0 = off.
+    understory_gap: float = 3.0
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
     # When provided it is used for per-point terrain height instead of re-deriving from the LAS file.
     dtm_grid: Optional[List[float]] = None   # flat array, dtm_rows * dtm_cols values

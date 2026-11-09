@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from models.schemas import UploadResponse, Bounds, UnitsRequest
 from services.las_reader import create_session, get_las_path, read_metadata, get_session_dir
 from services.sessions import purge_session, list_patch_ids, is_valid_session_id
-from services.units import detect_units, describe, get_session_units, set_session_units
+from services.units import detect_units, describe, get_session_units, set_session_units, UnitsConflict
 import config
 
 router = APIRouter(prefix="/api/v1/files", tags=["files"])
@@ -50,7 +50,7 @@ def upload_file(file: UploadFile = File(...), folder: str | None = Form(None)):
                     raise HTTPException(413, f"File exceeds {config.MAX_UPLOAD_BYTES} byte limit")
                 out.write(chunk)
 
-        meta = read_metadata(session_id)
+        return _register_session(session_id, dest, file.filename, folder)
     except HTTPException:
         shutil.rmtree(get_session_dir(session_id), ignore_errors=True)
         raise
@@ -58,21 +58,26 @@ def upload_file(file: UploadFile = File(...), folder: str | None = Form(None)):
         shutil.rmtree(get_session_dir(session_id), ignore_errors=True)
         raise HTTPException(500, "Failed to process uploaded file")
 
+
+def _register_session(session_id: str, dest: Path, filename: str, folder: str | None) -> UploadResponse:
+    """Read a file just stored as a session's original and record it (meta.json, units,
+    dataset registry). Shared by uploads and by "split and load"."""
+    meta = read_metadata(session_id)
     # Persist original filename + metadata so /info never has to re-read the LAS file
     units = detect_units(dest, meta["bounds"]["x"][0])
     (get_session_dir(session_id) / "meta.json").write_text(
-        __import__("json").dumps({"filename": file.filename, "folder": _clean_folder(folder), **meta, "units": units})
+        __import__("json").dumps({"filename": filename, "folder": _clean_folder(folder), **meta, "units": units})
     )
     try:
         from services import dataset_registry as dreg
-        dreg.upsert_source(file.filename, units=units.get("code"), units_source=units.get("source"),
+        dreg.upsert_source(filename, units=units.get("code"), units_source=units.get("source"),
                            point_count=int(meta["point_count"]))
     except Exception as e:   # the registry must never block an upload
         print(f"[dataset] could not record source: {e}")
 
     return UploadResponse(
         session_id=session_id,
-        filename=file.filename,
+        filename=filename,
         folder=_clean_folder(folder),
         point_count=meta["point_count"],
         bounds=Bounds(**meta["bounds"]),
@@ -118,7 +123,9 @@ def set_units(session_id: str, req: UnitsRequest):
     if not is_valid_session_id(session_id) or not get_session_dir(session_id).exists():
         raise HTTPException(404, "Session not found")
     try:
-        return set_session_units(session_id, req.units)
+        return set_session_units(session_id, req.units, force=req.force)
+    except UnitsConflict as e:
+        raise HTTPException(409, {"code": "units_conflict", "crs": e.crs_code, "message": str(e)})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -143,15 +150,35 @@ def delete_session(session_id: str):
 _SPLIT_GRIDS = {4: (2, 2), 8: (2, 4), 16: (4, 4), 32: (4, 8)}
 
 
+def _tile_masks(x, y, x_min, x_max, y_min, y_max, rows, cols, stem):
+    """(file name, point mask) of every non-empty grid tile, numbered like the ZIP."""
+    x_step = (x_max - x_min) / cols
+    y_step = (y_max - y_min) / rows
+    n = 0
+    for row in range(rows):
+        for col in range(cols):
+            xs = x_min + col * x_step
+            xe = x_min + (col + 1) * x_step if col < cols - 1 else x_max + 1e-6
+            ys = y_min + row * y_step
+            ye = y_min + (row + 1) * y_step if row < rows - 1 else y_max + 1e-6
+            mask = (x >= xs) & (x < xe) & (y >= ys) & (y < ye)
+            if mask.any():
+                n += 1
+                yield f"{stem}_patch_{n}.las", mask
+
+
 @router.post("/split")
 async def split_file(
     file: UploadFile = File(...),
     n_tiles: int = Form(...),
+    load: bool = Form(False),
 ):
-    """Tile a large LAS/LAZ file into an NxM grid and return a ZIP of the patches.
+    """Tile a large LAS/LAZ file into an NxM grid.
 
     Grid layouts: 4→2×2  8→2×4  16→4×4  32→4×8
-    Each non-empty tile is saved as <stem>/<stem>_patch_N.las inside the ZIP.
+    load=False: returns a ZIP with <stem>/<stem>_patch_N.las per non-empty tile.
+    load=True:  loads every tile into the tool instead, grouped in the folder <stem>,
+                and returns {"folder", "tiles": [upload responses]}.
     """
     if n_tiles not in _SPLIT_GRIDS:
         raise HTTPException(400, f"n_tiles must be one of {list(_SPLIT_GRIDS)}")
@@ -179,6 +206,20 @@ async def split_file(
         y_min, y_max = float(y.min()), float(y.max())
         x_step = (x_max - x_min) / cols
         y_step = (y_max - y_min) / rows
+
+        if load:
+            loaded = []
+            try:
+                for name, mask in _tile_masks(x, y, x_min, x_max, y_min, y_max, rows, cols, stem):
+                    sid = create_session()
+                    dest = get_session_dir(sid) / "original.las"
+                    laspy.LasData(copy.deepcopy(las.header), points=las.points[mask]).write(str(dest), do_compress=False)
+                    loaded.append(_register_session(sid, dest, name, stem))
+            except Exception:
+                for t in loaded:     # all or nothing
+                    purge_session(t.session_id)
+                raise
+            return {"folder": stem, "tiles": loaded}   # models are serialised by FastAPI
 
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
