@@ -70,8 +70,14 @@ def _register_session(session_id: str, dest: Path, filename: str, folder: str | 
     )
     try:
         from services import dataset_registry as dreg
-        dreg.upsert_source(filename, units=units.get("code"), units_source=units.get("source"),
-                           point_count=int(meta["point_count"]))
+        try:
+            from services.location import tile_location
+            location = tile_location(dest)      # state + nearest city from the file's CRS
+        except Exception as e:
+            print(f"[location] {filename}: {e}")
+            location = None
+        dreg.upsert_source(filename, location=location, units=units.get("code"),
+                           units_source=units.get("source"), point_count=int(meta["point_count"]))
     except Exception as e:   # the registry must never block an upload
         print(f"[dataset] could not record source: {e}")
 

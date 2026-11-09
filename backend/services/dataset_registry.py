@@ -128,7 +128,10 @@ def count_trees(labels: np.ndarray) -> int:
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 
-def upsert_source(name: str, **info) -> dict:
+def upsert_source(name: str, location: dict | None = None, **info) -> dict:
+    """Create or touch a source tile. `location` (services/location.tile_location: state and
+    nearest city from the file's coordinates) fills state / city when they are still empty —
+    a value set by hand is never overwritten."""
     with _lock:
         data = _load()
         src = data["sources"].get(name)
@@ -137,13 +140,77 @@ def upsert_source(name: str, **info) -> dict:
                 "name": name, "city": "", "state": guess_state(name), "status": "to do",
                 "notes": "", "added": _now(), "max_patch_number": 0,
             }
+            if src["state"]:
+                src["place_source"] = "name"
             data["sources"][name] = src
+            _apply_location(src, location)
+        elif not src.get("state"):
+            # known tile whose region was never found: fill it now. Tiles that already
+            # have a region keep it (their saved patches are named after it).
+            _apply_location(src, location)
         src.update({k: v for k, v in info.items() if v is not None})
         src["last_opened"] = _now()
         if src.get("status") == "to do":
             src["status"] = "in progress"
         _save(data)
         return dict(src)
+
+
+def _apply_location(src: dict, location: dict | None, overwrite: bool = False) -> bool:
+    """Put a tile_location() result into a source record. Returns True if anything changed."""
+    if not location:
+        return False
+    changed = False
+    src["lat"], src["lon"] = location.get("lat"), location.get("lon")
+    if location.get("state") and (overwrite or not src.get("state") or src.get("place_source") == "name"):
+        changed |= src.get("state") != location["state"]
+        src["state"] = location["state"]
+        src["place_source"] = "coordinates"
+    if location.get("city") and (overwrite or not src.get("city")):
+        changed |= src.get("city") != location["city"]
+        src["city"] = location["city"]
+        src["city_source"] = "coordinates"
+    return changed
+
+
+def locate_sources(locations: dict[str, dict]) -> dict:
+    """Set state / city of several sources from their coordinates (overwrites).
+    locations: {source name: tile_location() result}. Returns {name: source}."""
+    with _lock:
+        data = _load()
+        out = {}
+        for name, loc in locations.items():
+            src = data["sources"].get(name)
+            if src is not None and loc:
+                _apply_location(src, loc, overwrite=True)
+                out[name] = dict(src)
+        _save(data)
+        return out
+
+
+def update_sources(names: list[str], fields: dict) -> list[dict]:
+    """update_source for several tiles at once (one write)."""
+    allowed = {"city", "state", "status", "notes"}
+    with _lock:
+        data = _load()
+        missing = [n for n in names if n not in data["sources"]]
+        if missing:
+            raise KeyError(missing[0])
+        if "status" in fields and fields["status"] not in SOURCE_STATUSES:
+            raise ValueError(f"status must be one of {SOURCE_STATUSES}")
+        out = []
+        for n in names:
+            src = data["sources"][n]
+            for k, v in fields.items():
+                if k in allowed:
+                    src[k] = str(v)
+                    if k == "state":
+                        src["place_source"] = "user"
+                    if k == "city":
+                        src["city_source"] = "user"
+            out.append(dict(src))
+        _save(data)
+        return out
 
 
 def get_source(name: str) -> dict | None:
@@ -180,6 +247,10 @@ def update_source(name: str, fields: dict) -> dict:
             if k == "status" and v not in SOURCE_STATUSES:
                 raise ValueError(f"status must be one of {SOURCE_STATUSES}")
             src[k] = str(v)
+            if k == "state":
+                src["place_source"] = "user"
+            if k == "city":
+                src["city_source"] = "user"
         _save(data)
         return dict(src)
 

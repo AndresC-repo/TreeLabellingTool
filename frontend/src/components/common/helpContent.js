@@ -125,6 +125,7 @@ export const HELP = {
         bullets: [
           'One row per loaded tile. <b>City</b> and <b>state</b> go into the file names of its patches.',
           'Mark tiles <b>done</b> or <b>skipped</b> to see what is still missing.',
+          'State and city are found from the tile coordinates when you load it. To fix many at once, tick tiles and use <b>Apply</b> or <b>📍 Detect from coordinates</b>.',
         ],
       },
       {

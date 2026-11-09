@@ -8,7 +8,13 @@
           <p class="split-hint">For files too big to work with in one piece. The file is cut into a grid of tiles.</p>
           <div class="split-row">
             <label>File</label>
-            <input type="file" accept=".las,.LAS,.laz,.LAZ" @change="e => (file = e.target.files[0] || null)" />
+            <!-- Chrome/Edge: open through the File System Access API, so "Save ZIP" can start
+                 in the same folder as the file. Other browsers: a normal file input. -->
+            <template v-if="canPickWithHandle">
+              <button class="pick-btn" @click="pickFile">Choose file…</button>
+              <span class="picked">{{ file ? file.name : 'no file chosen' }}</span>
+            </template>
+            <input v-else type="file" accept=".las,.LAS,.laz,.LAZ" @change="e => { file = e.target.files[0] || null; fileHandle = null }" />
           </div>
           <div class="split-row">
             <label>Tiles</label>
@@ -60,6 +66,7 @@
 
         <template v-else-if="stage === 'ready'">
           <p class="split-status success">✅ {{ nTiles }} tiles ready.</p>
+          <p v-if="fileHandle" class="split-hint">The save dialog opens in the folder of {{ file?.name }}.</p>
           <div class="split-actions">
             <button @click="close">Close</button>
             <button class="split-go" @click="saveZip">💾 Save ZIP…</button>
@@ -78,7 +85,7 @@
 <script setup>
 // Split a large LAS/LAZ into a grid of tiles, then load them into the tool as one folder
 // or download them as a ZIP. Used on the start page and in the 2D view.
-import { ref, computed } from 'vue'
+import { ref, shallowRef, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { splitFile } from '../../api/client.js'
 import { useSessionStore } from '../../stores/session.js'
@@ -92,6 +99,23 @@ const session = useSessionStore()
 const toast = useToastStore()
 
 const file = ref(null)
+// FileSystemFileHandle of the chosen file (Chrome/Edge). shallowRef: the browser needs the
+// real handle object, not a reactive wrapper.
+const fileHandle = shallowRef(null)
+const canPickWithHandle = typeof window !== 'undefined' && !!window.showOpenFilePicker && !!window.showSaveFilePicker
+
+async function pickFile() {
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'LAS / LAZ point cloud', accept: { 'application/octet-stream': ['.las', '.laz'] } }],
+      excludeAcceptAllOption: false, multiple: false,
+    })
+    fileHandle.value = handle
+    file.value = await handle.getFile()
+  } catch (err) {
+    if (err.name !== 'AbortError') toast.error('Could not open the file: ' + err.message)
+  }
+}
 const nTiles = ref(4)
 const mode = ref('load')          // 'load' | 'zip'
 const stage = ref('idle')         // idle | uploading | splitting | loaded | ready | saved
@@ -104,7 +128,7 @@ const stem = computed(() => (file.value?.name || '').replace(/\.[^.]+$/, ''))
 
 function close() {
   emit('update:open', false)
-  stage.value = 'idle'; file.value = null; zipBlob.value = null; pct.value = 0
+  stage.value = 'idle'; file.value = null; fileHandle.value = null; zipBlob.value = null; pct.value = 0
   loadedTiles.value = []; loadedFolder.value = ''
 }
 
@@ -154,6 +178,8 @@ async function saveZip() {
     if (window.showSaveFilePicker) {
       const handle = await window.showSaveFilePicker({
         suggestedName: name,
+        // start in the folder the split file came from (when we know it)
+        startIn: fileHandle.value || 'downloads',
         types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
       })
       const writable = await handle.createWritable()
@@ -190,6 +216,9 @@ async function saveZip() {
 .split-row select, .split-row input[type=file] {
   flex: 1; background: #1a1a35; color: #cce; border: 1px solid #335; border-radius: 4px; padding: 4px 6px; font-size: 13px;
 }
+.pick-btn { background: #1a1a35; color: #cce; border: 1px solid #446; border-radius: 4px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.pick-btn:hover { background: #2a2a4e; }
+.picked { flex: 1; font-size: 13px; color: #aab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modes { display: flex; flex-direction: column; gap: 6px; }
 .mode-opt { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #cce; cursor: pointer; }
 .split-status { margin: 0; font-size: 14px; color: #adf; font-weight: 500; }

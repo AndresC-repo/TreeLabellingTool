@@ -157,9 +157,19 @@
 
       <!-- Source tiles table -->
       <div v-else class="table-wrap">
+        <div v-if="picked.size" class="bulk">
+          <b>{{ picked.size }} tile{{ picked.size > 1 ? 's' : '' }} selected</b>
+          <input class="short" v-model="bulk.state" maxlength="4" placeholder="State" title="State code, e.g. DC" />
+          <input class="mid" v-model="bulk.city" placeholder="City" />
+          <button :disabled="!bulk.state.trim() && !bulk.city.trim()" @click="applyBulk">Apply</button>
+          <span class="sep">|</span>
+          <button :disabled="busy" @click="locatePicked" title="Read each tile's coordinates and find its state and nearest city (tile must be loaded in the tool)">📍 Detect from coordinates</button>
+          <button class="ghost" @click="picked.clear()">Clear</button>
+        </div>
         <table>
           <thead>
             <tr>
+              <th class="pick"><input type="checkbox" :checked="allPicked" :indeterminate.prop="picked.size > 0 && !allPicked" @change="pickAll($event.target.checked)" title="Select all shown tiles" /></th>
               <th>Source tile</th>
               <th>State</th>
               <th>City</th>
@@ -173,10 +183,11 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="s in filteredSources" :key="s.name">
+            <tr v-for="s in filteredSources" :key="s.name" :class="{ picked: picked.has(s.name) }">
+              <td class="pick"><input type="checkbox" :checked="picked.has(s.name)" @change="togglePick(s.name, $event.target.checked)" /></td>
               <td class="file"><div class="fname" :title="s.name">{{ s.name }}</div></td>
-              <td><input class="short" :value="s.state" maxlength="4" @change="setSource(s, { state: $event.target.value.trim().toUpperCase() })" /></td>
-              <td><input class="mid" :value="s.city" placeholder="city" @change="setSource(s, { city: $event.target.value.trim() })" /></td>
+              <td><input class="short" :value="s.state" maxlength="4" :title="placeHint(s.place_source, s)" @change="setSource(s, { state: $event.target.value.trim().toUpperCase() })" /></td>
+              <td><input class="mid" :value="s.city" placeholder="city" :title="placeHint(s.city_source, s)" @change="setSource(s, { city: $event.target.value.trim() })" /></td>
               <td :class="{ warn: s.units_source === 'uncertain' }" :title="s.units_source">{{ s.units || '' }}</td>
               <td class="num">{{ s.patches }}</td>
               <td class="num">{{ s.exported }}</td>
@@ -189,7 +200,7 @@
               <td><input class="notes" :value="s.notes" placeholder="add a note" @change="setSource(s, { notes: $event.target.value })" @keydown.enter="$event.target.blur()" /></td>
               <td class="date">{{ fmtDate(s.last_opened) }}</td>
             </tr>
-            <tr v-if="!filteredSources.length"><td colspan="10" class="empty">No tiles yet — tiles appear here when you load them in the tool.</td></tr>
+            <tr v-if="!filteredSources.length"><td colspan="11" class="empty">No tiles yet — tiles appear here when you load them in the tool.</td></tr>
           </tbody>
         </table>
       </div>
@@ -205,7 +216,8 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetPatch, datasetCsvUrl,
+import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetSourcesBulk, locateDatasetSources,
+         updateDatasetPatch, datasetCsvUrl,
          openDatasetPatch, renameDatasetFile } from '../api/client.js'
 import { useToastStore } from '../stores/toast.js'
 import HelpButton from '../components/common/HelpButton.vue'
@@ -300,6 +312,47 @@ async function setSource(s, fields) {
     Object.assign(s, before)
     toast.error('Not saved: ' + (err.response?.data?.detail || err.message))
   }
+}
+
+// ── bulk state / city for source tiles ──
+const picked = reactive(new Set())
+const bulk = reactive({ state: '', city: '' })
+const busy = ref(false)
+const allPicked = computed(() => filteredSources.value.length > 0 && filteredSources.value.every(s => picked.has(s.name)))
+function togglePick(name, on) { on ? picked.add(name) : picked.delete(name) }
+function pickAll(on) { for (const s of filteredSources.value) togglePick(s.name, on) }
+function placeHint(src, s) {
+  const where = s.lat != null ? ` (${s.lat.toFixed(3)}, ${s.lon.toFixed(3)})` : ''
+  return { coordinates: 'Found from the tile coordinates' + where, name: 'Guessed from the file name',
+           user: 'Set by hand' }[src] || ''
+}
+async function applyBulk() {
+  const fields = {}
+  if (bulk.state.trim()) fields.state = bulk.state.trim().toUpperCase()
+  if (bulk.city.trim()) fields.city = bulk.city.trim()
+  try {
+    await updateDatasetSourcesBulk([...picked], fields)
+    toast.success(`Updated ${picked.size} tile${picked.size > 1 ? 's' : ''}.`)
+    bulk.state = ''; bulk.city = ''; picked.clear()
+    await load()
+  } catch (err) {
+    toast.error('Not saved: ' + (err.response?.data?.detail || err.message))
+  }
+}
+async function locatePicked() {
+  busy.value = true
+  try {
+    const r = await locateDatasetSources([...picked])
+    const ok = r.updated.length, bad = r.failed.length
+    if (ok) toast.success(`Located ${ok} tile${ok > 1 ? 's' : ''}: ` +
+      [...new Set(r.updated.map(s => [s.city, s.state].filter(Boolean).join(', ')))].join('; '))
+    if (bad) toast.error(`${bad} not located — ` + r.failed.slice(0, 3).map(f => `${f.name.slice(0, 40)}: ${f.reason}`).join(' · ') +
+      (bad > 3 ? ' …' : '') + '. Load the tile in the tool, or type the state/city.')
+    for (const s of r.updated) picked.delete(s.name)
+    await load()
+  } catch (err) {
+    toast.error('Detect failed: ' + (err.response?.data?.detail || err.message))
+  } finally { busy.value = false }
 }
 
 // ── open in 3D (double-click a row) ──
@@ -517,6 +570,14 @@ input.mid { width: 120px; }
 .date { color: #889; white-space: nowrap; font-size: 12px; }
 .open { color: #7af; font-size: 12px; text-decoration: none; background: none; border: 1px solid #345; padding: 2px 8px; }
 .open:hover { text-decoration: underline; }
+.bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 6px;
+  background: #1b2442; border: 1px solid #3a4a7e; border-radius: 6px; font-size: 12.5px; color: #cdd8f5; }
+.bulk button { background: #2d4580; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.bulk button:disabled { opacity: 0.45; cursor: default; }
+.bulk button.ghost { background: none; color: #9ab; }
+.bulk .sep { color: #556; }
+th.pick, td.pick { width: 28px; padding-right: 0; }
+tr.picked td { background: #1a2140; }
 .empty { color: #778; font-size: 12px; text-align: center; padding: 18px; }
 .foot { margin-top: 10px; font-size: 11px; color: #667; }
 .foot code { color: #88a; }

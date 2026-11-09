@@ -59,6 +59,60 @@ def patch_patch(req: PatchUpdate):
         raise HTTPException(400, str(e))
 
 
+class SourcesBulk(BaseModel):
+    names: list[str]
+    fields: dict = {}
+
+
+@router.patch("/sources/bulk")
+def update_sources_bulk(req: SourcesBulk):
+    """Set state / city / status / notes of several source tiles at once."""
+    try:
+        return {"sources": dreg.update_sources(req.names, req.fields)}
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown tile {e}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/sources/locate")
+def locate_sources(req: SourcesBulk):
+    """Fill state and city of tiles from the coordinates in their files. Uses the tiles
+    that are loaded in the tool (the original file is needed); reports the others."""
+    import json
+    from services.las_reader import get_las_path
+    from config import SESSIONS_DIR
+    from services.location import tile_location
+    wanted = set(req.names)
+    files = {}
+    for meta_path in SESSIONS_DIR.glob("*/meta.json"):
+        try:
+            name = json.loads(meta_path.read_text()).get("filename")
+        except Exception:
+            continue
+        if name in wanted and name not in files:
+            p = get_las_path(meta_path.parent.name)
+            if p.exists():
+                files[name] = p
+    located, failed = {}, []
+    for name in req.names:
+        if name not in files:
+            failed.append({"name": name, "reason": "not loaded in the tool"})
+            continue
+        try:
+            loc = tile_location(files[name])
+        except Exception as e:
+            loc, err = None, str(e)
+        else:
+            err = "no coordinate system in the file, or outside the US"
+        if loc and loc.get("state"):
+            located[name] = loc
+        else:
+            failed.append({"name": name, "reason": err})
+    updated = dreg.locate_sources(located)
+    return {"updated": list(updated.values()), "failed": failed}
+
+
 @router.post("/open")
 def open_patch(req: KeyRequest):
     """Open a patch in the 3D view. If its session is gone, the saved file in the labels
