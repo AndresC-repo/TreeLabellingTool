@@ -83,7 +83,7 @@ export const HELP = {
         steps: [
           '<b>Run ▾</b> (or <b>I</b>): the neural network marks tree / non-tree points.',
           'Drag the <b>Tree threshold</b> slider to change how sure the model must be: left = more trees, right = fewer. It updates instantly; ↺ goes back to the model\'s default.',
-          '<b>Segment Trees (CHM)</b> splits them into single trees. Hover a setting for what it does; <b>Min tree spacing</b> decides which tops count as separate trees; <b>Understory gap</b> splits off small trees standing under a bigger crown.',
+          '<b>Segment Trees (CHM)</b> splits them into single trees. With <b>Live update</b> on, moving a slider re-runs it at once; <b>Reset defaults</b> goes back to the values tuned on your labelled patches. <b>Apply to Labels</b> segments first if the trees are not split yet.',
           'Looks right? <b>Apply to Labels</b>, then fix mistakes by hand with the lasso.',
         ],
       },
@@ -118,6 +118,7 @@ export const HELP = {
           '<b>✎</b> (hover a file name) renames the file in <code>data/labels</code>.',
           'Set a <b>status</b> (labelled, needs fix, reviewed, excluded) and notes to keep track. Excluded patches don\'t count in the totals.',
           '<b>By</b> shows who labelled it.',
+          '<b>Smallest</b> is the height of the shortest labelled tree (m above the ground under it). Use <b>Trees &lt; 2.5 m</b> in the filters to find patches with very small trees; hover the value to see every tree height. Heights are measured by <b>⟳ Rescan</b> and on every save.',
         ],
       },
       {

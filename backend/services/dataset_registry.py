@@ -25,6 +25,7 @@ import numpy as np
 import laspy
 
 import config
+from services.tree_heights import SHORT_TREE_M, HEIGHTS_VERSION
 
 SOURCE_STATUSES = ["to do", "in progress", "done", "skipped"]
 PATCH_STATUSES = ["in progress", "labelled", "needs fix", "reviewed", "excluded"]
@@ -306,6 +307,13 @@ def record_export(key: str, file_name: str, trees: int, units: str | None) -> di
         if key != f"file:{file_name}":
             data["patches"].pop(f"file:{file_name}", None)
         p.update({"file": file_name, "trees": int(trees), "exported_at": _now(), "units": units})
+        f = labels_dir() / file_name
+        if f.exists():
+            stats = _file_stats(f, units)
+            p.update({"tree_heights": stats["tree_heights"], "height_units": stats["height_units"],
+                      "heights_v": stats.get("heights_v"),
+                      "points": stats["points"] or p.get("points"),
+                      "file_sig": [f.stat().st_size, round(f.stat().st_mtime, 1)]})
         if not p.get("labeller") and config.LABELLER:
             p["labeller"] = config.LABELLER
         if p.get("status") in ("in progress", "excluded", None):
@@ -437,13 +445,13 @@ def update_patch(key: str, fields: dict) -> dict:
 
 # ── Labels folder scan ────────────────────────────────────────────────────────
 
-def _file_trees(path: Path) -> tuple[int, int]:
-    las = laspy.read(str(path))
-    if "label" in las.point_format.extra_dimension_names:
-        lab = np.asarray(las.label)
-        if (lab >= 100).any():
-            return count_trees(lab), len(las.points)
-    return count_trees(np.asarray(las.classification)), len(las.points)
+def _file_stats(path: Path, units_hint: str | None = None) -> dict:
+    from services.tree_heights import file_stats
+    try:
+        return file_stats(path, units_hint)
+    except Exception as e:
+        print(f"[registry] could not read {path.name}: {e}")
+        return {"trees": -1, "points": 0, "tree_heights": [], "height_units": "", "heights_v": HEIGHTS_VERSION}
 
 
 def scan_labels_folder() -> dict:
@@ -463,12 +471,9 @@ def scan_labels_folder() -> dict:
             sig = [st.st_size, round(st.st_mtime, 1)]
             key = owned.get(f.name) or f"file:{f.name}"
             p = data["patches"].get(key)
-            if p is not None and p.get("file_sig") == sig:
+            if p is not None and p.get("file_sig") == sig and p.get("heights_v") == HEIGHTS_VERSION:
                 continue
-            try:
-                trees, points = _file_trees(f)
-            except Exception:
-                trees, points = -1, 0
+            stats = _file_stats(f, p.get("units") if p else None)
             if p is None:
                 data["patches"][key] = {
                     "key": key, "source": "", "patch_number": None, "origin": "folder",
@@ -478,7 +483,7 @@ def scan_labels_folder() -> dict:
                 added += 1
             else:
                 updated += 1
-            data["patches"][key].update({"trees": trees, "points": points, "file_sig": sig})
+            data["patches"][key].update({**stats, "file_sig": sig})
         for k, p in data["patches"].items():
             if p.get("file"):
                 p["file_missing"] = p["file"] not in present
@@ -519,6 +524,7 @@ def overview() -> dict:
         "sources": srcs,
         "patches": patches,
         "source_statuses": SOURCE_STATUSES,
+        "short_tree_m": SHORT_TREE_M,
         "patch_statuses": PATCH_STATUSES,
         "labels_folder": {"connected": connected, "path": str(root / "labels"),
                           "registry": str(_registry_path().name)},

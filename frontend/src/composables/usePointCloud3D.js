@@ -250,6 +250,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   let currentLabels = null        // Int32Array tracking the current label per point
   let origAsprsClassifications = null // original ASPRS classification from LAS (never changes)
   let cachedTerrainGrid = null    // result of _buildGroundTerrain — null when no class-2 points
+  let groundCls = null            // per-point classes the ground model was built from
   let inferenceCHMColors = null   // CHM colored only for tree-labeled (101) points
   let _zMin = 0, _zMax = 0       // Z bounds for filter
   let _xMin = 0, _xMax = 0, _yMin = 0, _yMax = 0  // XY bounds (local, relative to _origin)
@@ -289,15 +290,11 @@ export function usePointCloud3D(scene, sessionId, patchId) {
         classificationColors[i*3] = r; classificationColors[i*3+1] = g; classificationColors[i*3+2] = b
       }
 
-      // DTM and CHM computed from positions + original ASPRS classifications (class 2 = ground)
-      cachedTerrainGrid = _buildGroundTerrain(positions, origClassifications, count)
-      dtmAvailable.value = cachedTerrainGrid !== null
-      dtmColors = cachedTerrainGrid ? computeDTMColors(positions, origClassifications, count) : null
-      chmColors = cachedTerrainGrid ? computeCHMColors(positions, origClassifications, count) : null
-
       cachedPositions = positions
       cachedClassifications = classifications
       origAsprsClassifications = origClassifications
+      // DTM and CHM from the ground points (class 2)
+      refreshGround()
       setPatchCache(positions, origClassifications, _origin)
 
       // Compute XYZ bounds from all points
@@ -382,7 +379,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
     // Compute tree-only CHM using the inference labels (101 = tree)
     if (cachedPositions && origAsprsClassifications) {
       inferenceCHMColors = computeInferenceCHMColors(
-        cachedPositions, origAsprsClassifications, inferenceArr, count
+        cachedPositions, groundCls ?? origAsprsClassifications, inferenceArr, count
       )
     }
     viewMode.value = 'prediction'
@@ -432,6 +429,7 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function getXYBounds() { return { xMin: _xMin, xMax: _xMax, yMin: _yMin, yMax: _yMax } }
 
   function setViewMode(mode) {
+    if ((mode === 'dtm' || mode === 'chm') && mode !== viewMode.value) refreshGround()
     viewMode.value = mode
     _applyToMesh(_activeColors())
   }
@@ -524,6 +522,31 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   // Returns null when no class-2 ground points exist.
   // xMin/yMin are LOCAL (same frame as positions); originX/originY convert to world
   // coordinates — use dtmWorldParams() in api/client.js when sending to the backend.
+  // Ground = the file's original class 2. If the file has no ground class, falls back to
+  // the points labelled 2 in the tool (including ground labelled in this session).
+  const MIN_GROUND = 20
+  function groundClasses() {
+    const n = pointCount.value
+    let cur = 0, orig = 0
+    for (let i = 0; i < n; i++) {
+      if (currentLabels?.[i] === 2) cur++
+      if (origAsprsClassifications && Math.round(origAsprsClassifications[i]) === 2) orig++
+    }
+    if (orig >= MIN_GROUND || orig >= cur) return origAsprsClassifications
+    return Float32Array.from(currentLabels ?? [])
+  }
+  // (Re)build the ground model; call after labelling ground to use the new labels.
+  function refreshGround() {
+    if (!cachedPositions) return false
+    const n = pointCount.value
+    groundCls = groundClasses()
+    cachedTerrainGrid = _buildGroundTerrain(cachedPositions, groundCls, n)
+    dtmAvailable.value = cachedTerrainGrid !== null
+    dtmColors = cachedTerrainGrid ? computeDTMColors(cachedPositions, groundCls, n) : null
+    chmColors = cachedTerrainGrid ? computeCHMColors(cachedPositions, groundCls, n) : null
+    return dtmAvailable.value
+  }
+
   function getDTMGrid() {
     if (!cachedTerrainGrid) return null
     const { terrain, GRID, xMin, yMin, xRange, yRange } = cachedTerrainGrid
@@ -556,5 +579,5 @@ export function usePointCloud3D(scene, sessionId, patchId) {
   function getZBounds() { return { zMin: _zMin, zMax: _zMax } }
   function getPointsMesh() { return pointsMesh }
 
-  return { load, loading, pointCount, dtmAvailable, getDTMGrid, getOrigin, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getXYBounds, getPointsMesh, dispose }
+  return { load, loading, pointCount, dtmAvailable, getDTMGrid, refreshGround, getOrigin, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, viewMode, getPositions, getLabelAt, getZBounds, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getXYBounds, getPointsMesh, dispose }
 }

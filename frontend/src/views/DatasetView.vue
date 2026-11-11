@@ -41,6 +41,9 @@
         <div class="card">
           <div class="big">{{ totals.zero }}</div>
           <div class="lbl">patches with 0 trees</div>
+          <button v-if="totals.short" class="short-link" :class="{ sel: filters.shortBelow }"
+                  title="Show the patches that have a labelled tree shorter than this"
+                  @click="toggleShortFilter">⚠ {{ totals.short }} with trees &lt; {{ shortM }} m</button>
         </div>
         <div class="card">
           <div class="big">{{ data.sources.length }}</div>
@@ -79,6 +82,11 @@
             <option value="">All regions</option>
             <option v-for="r in regions" :key="r" :value="r">{{ r || 'unknown' }}</option>
           </select>
+          <select v-if="tab === 'patches'" v-model.number="filters.shortBelow" :class="{ active: filters.shortBelow }"
+                  title="Show patches with at least one labelled tree shorter than this (height above the ground under it)">
+            <option :value="0">Any tree height</option>
+            <option v-for="h in shortOptions" :key="h" :value="h">Trees &lt; {{ h }} m</option>
+          </select>
           <select v-if="tab === 'patches'" v-model="filters.status">
             <option value="">All statuses</option>
             <option v-for="s in data.patch_statuses" :key="s" :value="s">{{ s }}</option>
@@ -100,6 +108,7 @@
               <th @click="sortBy('region')">Region</th>
               <th @click="sortBy('labeller')" title="Who labelled it (editable)">By</th>
               <th @click="sortBy('trees')" class="num">Trees</th>
+              <th @click="sortBy('min_height')" class="num" title="Height of the smallest labelled tree, metres above the ground under it">Smallest</th>
               <th @click="sortBy('points')" class="num">Points</th>
               <th @click="sortBy('status')">Status</th>
               <th>Notes</th>
@@ -132,6 +141,12 @@
                        @change="setPatch(p, { labeller: $event.target.value.trim() })" @keydown.enter="$event.target.blur()" />
               </td>
               <td class="num" :class="{ zero: p.trees === 0 }">{{ p.trees >= 0 ? p.trees : '?' }}</td>
+              <td class="num height" :class="{ warn: minHeight(p) < shortLimit }" :title="heightTitle(p)">
+                <template v-if="minHeight(p) != null">
+                  {{ minHeight(p).toFixed(1) }} m
+                  <span v-if="shortCount(p)" class="badge short">{{ shortCount(p) }} &lt; {{ shortLimit }}</span>
+                </template>
+              </td>
               <td class="num">{{ p.points ? p.points.toLocaleString() : '' }}</td>
               <td>
                 <select :value="p.status" class="status" :class="'st-' + slug(p.status)" @change="setPatch(p, { status: $event.target.value })">
@@ -150,7 +165,7 @@
                 </button>
               </td>
             </tr>
-            <tr v-if="!sortedPatches.length"><td colspan="9" class="empty">No patches match.</td></tr>
+            <tr v-if="!sortedPatches.length"><td colspan="10" class="empty">No patches match.</td></tr>
           </tbody>
         </table>
       </div>
@@ -228,7 +243,7 @@ const data = ref(null)
 const loadError = ref(null)
 const scanning = ref(false)
 const tab = ref('patches')
-const filters = reactive({ q: '', region: '', status: '', tileStatus: '' })
+const filters = reactive({ q: '', region: '', status: '', tileStatus: '', shortBelow: 0 })
 const sort = reactive({ key: 'file', dir: 1 })
 
 // The page remembers tab, filters, sort, scroll and the last opened row for this browser
@@ -411,8 +426,26 @@ const totals = computed(() => {
     trees: ps.reduce((n, p) => n + Math.max(0, p.trees ?? 0), 0),
     files: ps.length,
     zero: ps.filter(p => p.trees === 0).length,
+    short: ps.filter(p => shortCount(p, shortM.value) > 0).length,
   }
 })
+
+// ── tree heights (computed by the folder scan / on save) ──
+const shortM = computed(() => data.value?.short_tree_m ?? 2.5)
+const shortOptions = computed(() => [...new Set([2, shortM.value, 3, 4, 5])].sort((a, b) => a - b))
+const shortLimit = computed(() => filters.shortBelow || shortM.value)
+const minHeight = p => (p.tree_heights?.length ? p.tree_heights[0] : null)
+const shortCount = (p, lim = shortLimit.value) => (p.tree_heights ?? []).filter(h => h < lim).length
+function heightTitle(p) {
+  if (!p.tree_heights?.length) return p.file ? 'Rescan the labels folder to measure tree heights' : ''
+  const hs = p.tree_heights.map(h => h.toFixed(1)).join(', ')
+  return `Tree heights (m): ${hs}` + (p.height_units ? `\nUnits of the file: ${p.height_units}` : '')
+}
+function toggleShortFilter() {
+  filters.shortBelow = filters.shortBelow ? 0 : shortM.value
+  tab.value = 'patches'
+  if (filters.shortBelow) { sort.key = 'min_height'; sort.dir = 1 }
+}
 
 const byRegion = computed(() => {
   const m = new Map()
@@ -443,11 +476,14 @@ const matchQ = (...xs) => !filters.q || xs.some(x => (x || '').toLowerCase().inc
 const filteredPatches = computed(() => (data.value?.patches ?? []).filter(p =>
   (!filters.region || regionKey(p) === filters.region) &&
   (!filters.status || p.status === filters.status) &&
+  (!filters.shortBelow || shortCount(p, filters.shortBelow) > 0) &&
   matchQ(p.file, p.source, p.notes, p.labeller)))
 
 const sortedPatches = computed(() => {
   const key = sort.key, dir = sort.dir
-  const val = p => key === 'region' ? regionOf(p) : (p[key] ?? (typeof p.trees === 'number' && key !== 'file' ? -1 : ''))
+  const val = p => key === 'region' ? regionOf(p)
+    : key === 'min_height' ? (minHeight(p) ?? Infinity)
+    : (p[key] ?? (typeof p.trees === 'number' && key !== 'file' ? -1 : ''))
   return [...filteredPatches.value].sort((a, b) => {
     const x = val(a), y = val(b)
     return (x > y ? 1 : x < y ? -1 : 0) * dir
@@ -459,8 +495,8 @@ const filteredSources = computed(() => (data.value?.sources ?? []).filter(s =>
   (!filters.tileStatus || s.status === filters.tileStatus) &&
   matchQ(s.name, s.notes, s.city)))
 
-const anyFilter = computed(() => filters.q || filters.region || filters.status || filters.tileStatus)
-function clearFilters() { Object.assign(filters, { q: '', region: '', status: '', tileStatus: '' }) }
+const anyFilter = computed(() => filters.q || filters.region || filters.status || filters.tileStatus || filters.shortBelow)
+function clearFilters() { Object.assign(filters, { q: '', region: '', status: '', tileStatus: '', shortBelow: 0 }) }
 function sortBy(key) {
   if (sort.key === key) sort.dir *= -1
   else { sort.key = key; sort.dir = key === 'trees' || key === 'points' || key === 'exported_at' ? -1 : 1 }
@@ -512,6 +548,11 @@ button:disabled { opacity: 0.6; cursor: default; }
 .card { background: #0d0d1f; border: 1px solid #2a2a44; border-radius: 10px; padding: 12px 14px; }
 .big { font-size: 1.7rem; font-weight: 600; color: #e6ecff; font-variant-numeric: tabular-nums; }
 .lbl { font-size: 12px; color: #889; }
+.short-link { display: block; margin-top: 6px; background: none; border: none; padding: 0; color: #fb4; font-size: 11.5px; cursor: pointer; text-align: left; }
+.short-link:hover, .short-link.sel { text-decoration: underline; color: #fd8; }
+td.height { white-space: nowrap; }
+.badge.short { background: #4a3510; color: #fc6; border-color: #7a5a20; }
+select.active { border-color: #c90; color: #fd8; }
 .card-title { font-size: 11px; color: #889; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
 .bar-row { display: grid; grid-template-columns: 110px 1fr auto; gap: 8px; align-items: center; font-size: 12px; padding: 2px 0; cursor: pointer; }
 .bar-lbl { color: #aab; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

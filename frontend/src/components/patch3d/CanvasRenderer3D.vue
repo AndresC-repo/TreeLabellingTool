@@ -170,7 +170,7 @@ const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
 const pc3d = usePointCloud3D(scene, route.params.id, route.params.patchId)
-const { load, loading, pointCount, getDTMGrid, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getPointsMesh, dispose } = pc3d
+const { load, loading, pointCount, getDTMGrid, refreshGround, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyUndoColors, applyPredictionColors, rebuildClassificationColors, resetColors, setViewMode, setPointSize, getPositions, getLabelAt, setElevationFilter, setClipFilter, clearClipFilter, getClippedOutIndices, getPointsMesh, dispose } = pc3d
 
 const lasso = useLasso3D(camera, renderer)
 
@@ -839,7 +839,11 @@ function probeHeight(e) {
   }
   showProbe(x, y, z, g)
 }
-watch(() => store.heightMode, on => { if (!on) clearHeightProbe() })
+// Turning the probe on rebuilds the ground model, so ground labelled in this session counts
+watch(() => store.heightMode, on => {
+  if (!on) return clearHeightProbe()
+  refreshGround(); store.dtmGrid = getDTMGrid()
+})
 
 function onHoverMove(e) {
   if (store.heightMode) { hoverInfo.value = null; probeHeight(e); return }
