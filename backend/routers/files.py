@@ -8,7 +8,7 @@ import numpy as np
 import laspy
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from models.schemas import UploadResponse, Bounds, UnitsRequest
 from services.las_reader import create_session, get_las_path, read_metadata, get_session_dir
 from services.sessions import purge_session, list_patch_ids, is_valid_session_id
@@ -153,6 +153,8 @@ def delete_session(session_id: str):
 # File splitting
 # ---------------------------------------------------------------------------
 
+from services.las_compat import plain_header
+
 _SPLIT_GRIDS = {4: (2, 2), 8: (2, 4), 16: (4, 4), 32: (4, 8)}
 
 
@@ -219,7 +221,7 @@ async def split_file(
                 for name, mask in _tile_masks(x, y, x_min, x_max, y_min, y_max, rows, cols, stem):
                     sid = create_session()
                     dest = get_session_dir(sid) / "original.las"
-                    laspy.LasData(copy.deepcopy(las.header), points=las.points[mask]).write(str(dest), do_compress=False)
+                    laspy.LasData(plain_header(las.header), points=las.points[mask]).write(str(dest), do_compress=False)
                     loaded.append(_register_session(sid, dest, name, stem))
             except Exception:
                 for t in loaded:     # all or nothing
@@ -228,7 +230,7 @@ async def split_file(
             return {"folder": stem, "tiles": loaded}   # models are serialised by FastAPI
 
         zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:   # fast; level 6 took minutes on big tiles
             patch_num = 0
             for row in range(rows):
                 for col in range(cols):
@@ -245,16 +247,17 @@ async def split_file(
 
                     # Copy the source header (scales, offsets, CRS/VLRs, extra dims) and
                     # every point dimension (returns, GPS time, RGB, labels, …).
-                    new_las = laspy.LasData(copy.deepcopy(las.header), points=las.points[mask])
+                    new_las = laspy.LasData(plain_header(las.header), points=las.points[mask])
 
                     patch_buf = io.BytesIO()
                     new_las.write(patch_buf, do_compress=False)
                     patch_buf.seek(0)
                     zf.writestr(f"{stem}/{stem}_patch_{patch_num}.las", patch_buf.read())
 
-        zip_buf.seek(0)
-        return StreamingResponse(
-            zip_buf,
+        # Send the bytes in one piece: StreamingResponse over a BytesIO iterates it line
+        # by line, i.e. millions of tiny chunks for binary data (minutes for big files).
+        return Response(
+            zip_buf.getvalue(),
             media_type="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{stem}.zip"'},
         )

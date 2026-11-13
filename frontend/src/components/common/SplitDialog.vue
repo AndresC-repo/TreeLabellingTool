@@ -1,20 +1,18 @@
 <template>
   <teleport to="body">
     <div v-if="open" class="split-overlay" @click.self="stage === 'idle' && close()">
-      <div class="split-box">
+      <div class="split-box" :class="{ dragging }" @dragover.prevent="dragging = stage === 'idle'"
+           @dragleave.self="dragging = false" @drop.prevent="onDrop">
         <h3>✂ Split a LAS / LAZ into tiles</h3>
 
         <template v-if="stage === 'idle'">
           <p class="split-hint">For files too big to work with in one piece. The file is cut into a grid of tiles.</p>
           <div class="split-row">
             <label>File</label>
-            <!-- Chrome/Edge: open through the File System Access API, so "Save ZIP" can start
-                 in the same folder as the file. Other browsers: a normal file input. -->
-            <template v-if="canPickWithHandle">
-              <button class="pick-btn" @click="pickFile">Choose file…</button>
-              <span class="picked">{{ file ? file.name : 'no file chosen' }}</span>
-            </template>
-            <input v-else type="file" accept=".las,.LAS,.laz,.LAZ" @change="e => { file = e.target.files[0] || null; fileHandle = null }" />
+            <button class="pick-btn" @click="pickFile">Choose file…</button>
+            <span class="picked">{{ file ? file.name : 'no file chosen — or drop one here' }}</span>
+            <!-- standard chooser: used when the browser has no File System Access API or it fails -->
+            <input ref="fileInput" type="file" accept=".las,.laz" hidden @change="onInputFile" />
           </div>
           <div class="split-row">
             <label>Tiles</label>
@@ -66,10 +64,10 @@
 
         <template v-else-if="stage === 'ready'">
           <p class="split-status success">✅ {{ nTiles }} tiles ready.</p>
-          <p v-if="fileHandle" class="split-hint">The save dialog opens in the folder of {{ file?.name }}.</p>
+          <p class="split-hint">The ZIP goes to your browser's download folder (or asks where, if your browser is set to ask).</p>
           <div class="split-actions">
             <button @click="close">Close</button>
-            <button class="split-go" @click="saveZip">💾 Save ZIP…</button>
+            <button class="split-go" @click="saveZip">💾 Download ZIP</button>
           </div>
         </template>
 
@@ -85,7 +83,7 @@
 <script setup>
 // Split a large LAS/LAZ into a grid of tiles, then load them into the tool as one folder
 // or download them as a ZIP. Used on the start page and in the 2D view.
-import { ref, shallowRef, computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { splitFile } from '../../api/client.js'
 import { useSessionStore } from '../../stores/session.js'
@@ -99,22 +97,24 @@ const session = useSessionStore()
 const toast = useToastStore()
 
 const file = ref(null)
-// FileSystemFileHandle of the chosen file (Chrome/Edge). shallowRef: the browser needs the
-// real handle object, not a reactive wrapper.
-const fileHandle = shallowRef(null)
-const canPickWithHandle = typeof window !== 'undefined' && !!window.showOpenFilePicker && !!window.showSaveFilePicker
+const fileInput = ref(null)
+const dragging = ref(false)
+const isLas = f => /\.(las|laz)$/i.test(f?.name || '')
 
-async function pickFile() {
-  try {
-    const [handle] = await window.showOpenFilePicker({
-      types: [{ description: 'LAS / LAZ point cloud', accept: { 'application/octet-stream': ['.las', '.laz'] } }],
-      excludeAcceptAllOption: false, multiple: false,
-    })
-    fileHandle.value = handle
-    file.value = await handle.getFile()
-  } catch (err) {
-    if (err.name !== 'AbortError') toast.error('Could not open the file: ' + err.message)
-  }
+function setFile(f) {
+  if (!f) return
+  if (!isLas(f)) { toast.error(`${f.name} is not a .las or .laz file`); return }
+  file.value = f
+}
+function onInputFile(e) { setFile(e.target.files[0]); e.target.value = '' }
+function onDrop(e) {
+  dragging.value = false
+  if (stage.value === 'idle') setFile(e.dataTransfer?.files?.[0])
+}
+
+function pickFile() {
+  // Standard file chooser: the File System Access picker failed silently on some setups.
+  fileInput.value?.click()
 }
 const nTiles = ref(4)
 const mode = ref('load')          // 'load' | 'zip'
@@ -128,7 +128,7 @@ const stem = computed(() => (file.value?.name || '').replace(/\.[^.]+$/, ''))
 
 function close() {
   emit('update:open', false)
-  stage.value = 'idle'; file.value = null; fileHandle.value = null; zipBlob.value = null; pct.value = 0
+  stage.value = 'idle'; file.value = null; zipBlob.value = null; pct.value = 0
   loadedTiles.value = []; loadedFolder.value = ''
 }
 
@@ -170,36 +170,23 @@ function openFirst() {
   router.push(`/session/${first.session_id}/view`)
 }
 
-async function saveZip() {
+function saveZip() {
+  // A normal download. (The "save next to the original" picker did nothing on some
+  // setups.) To choose the folder each time, turn on "Ask where to save each file" in
+  // the browser's download settings.
   const blob = zipBlob.value
   if (!blob) return
-  const name = `${stem.value}.zip`
-  try {
-    if (window.showSaveFilePicker) {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: name,
-        // start in the folder the split file came from (when we know it)
-        startIn: fileHandle.value || 'downloads',
-        types: [{ description: 'ZIP archive', accept: { 'application/zip': ['.zip'] } }],
-      })
-      const writable = await handle.createWritable()
-      await writable.write(blob)
-      await writable.close()
-    } else {
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url; a.download = name
-      document.body.appendChild(a); a.click(); document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-    }
-    stage.value = 'saved'
-  } catch (err) {
-    if (err.name !== 'AbortError') toast.error('Save failed: ' + err.message)
-  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `${stem.value}.zip`
+  document.body.appendChild(a); a.click(); document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  stage.value = 'saved'
 }
 </script>
 
 <style scoped>
+.split-box.dragging { outline: 2px dashed #5a8adf; outline-offset: -6px; }
 .split-overlay {
   position: fixed; inset: 0; background: rgba(0,0,0,0.65);
   display: flex; align-items: center; justify-content: center; z-index: 200;

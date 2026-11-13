@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Optional, List, Dict
 
 class Bounds(BaseModel):
@@ -140,6 +140,10 @@ class RelabelSelectionRequest(BaseModel):
     point_indices: List[int]
     from_label: int
     to_label: int
+
+class RelabelAllRequest(BaseModel):
+    from_label: int
+    to_label: int = Field(ge=0, le=2_147_483_647)
 
 class RelabelSelectionResponse(BaseModel):
     applied: int

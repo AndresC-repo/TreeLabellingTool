@@ -116,6 +116,10 @@ export const getTreeMetrics = (sessionId, patchId, labels, cell_size, dtmGrid) =
   return api.post(`/patches/${sessionId}/${patchId}/tree-metrics`, payload)
 }
 
+// Every point with fromLabel gets toLabel (0 = unlabel). Undoable.
+export const relabelAll = (sessionId, patchId, fromLabel, toLabel) =>
+  api.post(`/patches/${sessionId}/${patchId}/relabel-all`, { from_label: fromLabel, to_label: toLabel })
+
 export const relabelSelection = (sessionId, patchId, pointIndices, fromLabel, toLabel) =>
   api.post(`/patches/${sessionId}/${patchId}/relabel-selection`, {
     point_indices: pointIndices,

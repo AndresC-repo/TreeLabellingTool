@@ -196,7 +196,8 @@ def _write_patch(patch_id, patch_path, src_header, raw_all, noise=None) -> dict:
     RGB, scan angle, the CRS and previously saved tree labels all carry over.
     (Previously only x/y/z/classification/intensity/number_of_returns were kept.)
     """
-    header = copy.deepcopy(src_header)
+    from services.las_compat import plain_header
+    header = plain_header(src_header)
     points = laspy.ScaleAwarePointRecord(
         np.concatenate(raw_all), header.point_format, header.scales, header.offsets,
     )
