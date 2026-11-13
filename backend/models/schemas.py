@@ -62,24 +62,31 @@ class SaveResponse(BaseModel):
 
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
-    cell_size: float = 1.5
-    smooth_window: int = 1
+    # Defaults = the panel's tuned defaults (InferenceLegend.vue), so a call without the
+    # panel behaves the same. All lengths in metres.
+    cell_size: float = 0.75
+    smooth_window: int = 5
     smooth_sigma: float = 0.0
     min_height: float = 2.5
-    min_distance: int = 10
-    max_radius: float = 1.0
-    min_tree_points: int = 500
-    min_crown_cells: int = 70
+    min_distance: int = 10       # legacy (cells); ignored when min_tree_spacing is set
+    max_radius: float = 3.0
+    min_tree_points: int = 30
+    min_crown_cells: int = 70    # legacy (cells); ignored when min_crown_area is set
     # Local maxima lower than this (m) are not used as seeds; None = same as min_height
-    min_peak_height: Optional[float] = None
+    min_peak_height: Optional[float] = 2.5
     # Blob filter as an area (m²); when set it replaces min_crown_cells
-    min_crown_area: Optional[float] = None
+    min_crown_area: Optional[float] = 2.0
     # Minimum distance between tree tops (m); when set it replaces min_distance (cells).
-    # (Was missing here, so the panel's value was silently ignored.)
-    min_tree_spacing: Optional[float] = None
+    min_tree_spacing: Optional[float] = 2.5
+    # A tree top is dropped when a taller one is closer than factor × that tree's height (m),
+    # capped at max_tree_spacing. 0 = fixed spacing only.
+    spacing_height_factor: float = 0.5
+    max_tree_spacing: float = 8.0
+    # Canopy no seed reached becomes its own tree (if large and tall enough) instead of non-tree.
+    rescue_orphans: bool = True
     # Split off trees standing under another crown: a vertical gap of at least this many
     # metres with no points separates them. 0 = off.
-    understory_gap: float = 3.0
+    understory_gap: float = 2.0
     # Optional DTM grid pre-computed on the frontend from ASPRS class-2 ground points.
     # When provided it is used for per-point terrain height instead of re-deriving from the LAS file.
     dtm_grid: Optional[List[float]] = None   # flat array, dtm_rows * dtm_cols values

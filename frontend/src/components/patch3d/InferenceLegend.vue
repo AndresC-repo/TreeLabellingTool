@@ -242,6 +242,14 @@
             <span>Understory trees split off</span>
             <span>{{ segStats.understory_trees }}</span>
           </div>
+          <div v-if="segStats.peaks_too_close_for_height" class="seg-row" title="Tree tops dropped because a taller tree is closer than Spacing × height">
+            <span>Tops too close to a taller tree</span>
+            <span>{{ segStats.peaks_too_close_for_height }}</span>
+          </div>
+          <div v-if="segStats.orphan_trees" class="seg-row" title="Canopy patches no tree top reached, kept as their own tree instead of becoming non-tree">
+            <span>Trees from unreached canopy</span>
+            <span>{{ segStats.orphan_trees }}</span>
+          </div>
           <div class="seg-row" title="Basins with fewer than Min pts / tree, merged into neighbours">
             <span>Small basins merged</span>
             <span>{{ segStats.basins_merged }}</span>
@@ -375,17 +383,22 @@ const instParams = reactive({
 // match F1 0.76, vs 0.65 with the previous defaults (cell 0.5, window 1, max radius 1,
 // min pts 300, blob 5 m², understory 3). Fewer points per tree matters most: small trees
 // were being merged into neighbours.
+// 2026-11-13: spacing now grows with tree height (spacing 2.5 m + height factor 0.5), min pts 30,
+// and canopy no seed reached is kept as its own tree. On 45 held-out patches (203 trees):
+// F1 0.81 -> 0.85, recall 0.73 -> 0.82, tree under-count -20 % -> -7 %.
 const DEFAULTS = Object.freeze({
   cell_size:        0.75,
   smooth_window:    5,
   smooth_sigma:     0.0,
   min_height:       2.5,
   min_peak_height:  2.5,
-  min_tree_spacing: 4,
+  min_tree_spacing: 2.5,
+  spacing_height_factor: 0.5,
   max_radius:       3,
-  min_tree_points:  50,
+  min_tree_points:  30,
   min_crown_area:   2,
   understory_gap:   2,
+  rescue_orphans:   true,
 })
 const params = reactive({ ...DEFAULTS })
 const PARAMS = [
@@ -397,6 +410,8 @@ const PARAMS = [
     tip: 'Extra smoothing on top of the window. Leave at 0 unless the canopy is very noisy.' },
   { key: 'min_tree_spacing', name: 'Min tree spacing', unit: 'm', min: 1, max: 10, step: 0.5,
     tip: 'Minimum distance between two tree tops. Larger values merge neighbouring trees.' },
+  { key: 'spacing_height_factor', name: 'Spacing × height', unit: '', min: 0, max: 1, step: 0.05,
+    tip: 'Taller trees get more room: a tree top is dropped when a taller one is closer than this × its height (at most 8 m). 0 = fixed spacing only.' },
   { key: 'min_height', name: 'Min height', unit: 'm', min: 0.5, max: 10, step: 0.5,
     tip: 'Points lower than this above the terrain become non-tree (also the canopy floor).' },
   { key: 'min_peak_height', name: 'Min peak height', unit: 'm', min: 0.5, max: 15, step: 0.5,
