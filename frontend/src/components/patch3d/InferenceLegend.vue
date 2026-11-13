@@ -280,44 +280,50 @@
         <span class="marker-text">Below min peak height (not a seed) — {{ store.segmentationRejectedPeaks.length }}</span>
       </div>
 
-      <!-- Crown metrics -->
+      <!-- Tree metrics -->
       <button
         v-if="store.segmentationPeaks.length"
         class="metrics-btn"
         :disabled="metricsLoading"
         @click="runMetrics"
-      >{{ metricsLoading ? 'Calculating…' : 'Calculate Crown Metrics' }}</button>
+      >{{ metricsLoading ? 'Calculating…' : 'Calculate Tree Metrics' }}</button>
 
       <div v-if="treeMetrics.length" class="metrics-section">
         <div class="metrics-header">
-          <span>Crown metrics — {{ treeMetrics.length }} trees</span>
-          <button class="metrics-close" @click="treeMetrics = []">✕</button>
+          <span>Tree metrics — {{ treeMetrics.length }} trees</span>
+          <span class="metrics-actions">
+            <button class="metrics-csv" title="Download all metrics, with position and quality notes, as a CSV file" @click="downloadMetricsCsv">⬇ CSV</button>
+            <button class="metrics-close" @click="treeMetrics = []">✕</button>
+          </span>
         </div>
-        <div v-if="dtmSource !== 'external'" class="metrics-warn">
-          No ground points — heights may be inaccurate
+        <div v-if="!metricsCrs" class="metrics-warn">
+          This file has no coordinate system — positions are in file coordinates only (no lat/lon)
+        </div>
+        <div v-if="metricsNoGround" class="metrics-warn">
+          No ground points — heights are measured from a rough ground level
         </div>
         <div class="metrics-scroll">
           <table class="metrics-table">
             <thead>
               <tr>
-                <th title="Tree instance number">#</th>
-                <th title="Maximum height above terrain (m)">Ht (m)</th>
-                <th title="Crown base height: 10th-percentile of point heights above terrain (m)">Hb (m)</th>
-                <th title="Live crown length: Ht − Hb (m)">Lc (m)</th>
-                <th title="Crown width: diameter of a circle with the same area as the crown footprint">CW (m)</th>
-                <th title="Crown footprint area (m²)">CA (m²)</th>
+                <th title="Tree number">#</th>
+                <th title="Height: highest point of the tree above the ground under it (m)">Ht (m)</th>
+                <th title="Crown diameter: diameter of a circle with the same area as the crown outline (m)">CD (m)</th>
+                <th title="Crown area: outline of the tree's points seen from above (m²)">CA (m²)</th>
+                <th title="Crown volume: 3D outline (convex hull) of the tree's points (m³)">Vol (m³)</th>
                 <th title="Number of LiDAR points in the tree">Pts</th>
+                <th title="Anything that makes this tree's numbers less reliable">Note</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="t in treeMetrics" :key="t.id">
+              <tr v-for="t in treeMetrics" :key="t.id" :title="t.lat != null ? `lat ${t.lat}, lon ${t.lon}` : ''">
                 <td>{{ t.id - 200 }}</td>
                 <td>{{ t.height }}</td>
-                <td>{{ t.base_height }}</td>
-                <td>{{ t.crown_length }}</td>
-                <td>{{ t.crown_width }}</td>
+                <td>{{ t.crown_diameter }}</td>
                 <td>{{ t.crown_area }}</td>
+                <td>{{ t.crown_volume }}</td>
                 <td>{{ t.point_count.toLocaleString() }}</td>
+                <td class="metrics-note" :title="qualityText(t.quality)">{{ t.quality === 'ok' ? '' : '⚠' }}</td>
               </tr>
             </tbody>
           </table>
@@ -364,6 +370,25 @@ const instParamsOpen  = ref(false)
 const paramsOpen      = ref(true)
 const helpOpen        = ref(false)
 const metricsLoading  = ref(false)
+const metricsCsv      = ref('')
+const metricsCrs      = ref('')
+const metricsNotes    = ref({})
+const metricsNoGround = computed(() => treeMetrics.value.some(t => t.ground_source !== 'ground_points'))
+function qualityText(q) {
+  if (!q || q === 'ok') return ''
+  return q.split(';').map(k => metricsNotes.value[k] || k).join('; ')
+}
+function downloadMetricsCsv() {
+  if (!metricsCsv.value) return
+  const url = URL.createObjectURL(new Blob([metricsCsv.value], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `tree_metrics_${route.params.patchId}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 const treeMetrics     = ref([])
 const instanceMessage = ref('')
 const inferenceEditLabel = ref(0)
@@ -677,6 +702,9 @@ async function runMetrics() {
       store.dtmGrid || null,
     )
     treeMetrics.value = res.data.trees
+    metricsCsv.value = res.data.csv || ''
+    metricsCrs.value = res.data.crs || ''
+    metricsNotes.value = res.data.quality_notes || {}
   } catch (err) {
     console.error('Crown metrics failed:', err)
   } finally {
@@ -926,6 +954,10 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
   padding: 5px 8px; background: #111828;
   font-size: 11px; color: #99c;
 }
+.metrics-actions { display: flex; gap: 6px; align-items: center; }
+.metrics-csv { background: #1a3a4a; border: 1px solid #2a5a6a; color: #cde; cursor: pointer; font-size: 10px; padding: 1px 6px; border-radius: 3px; }
+.metrics-csv:hover { background: #2a5a6a; }
+.metrics-note { color: #c84; cursor: help; }
 .metrics-close { background: none; border: none; color: #556; cursor: pointer; font-size: 11px; padding: 0 2px; }
 .metrics-close:hover { color: #aac; }
 .metrics-warn { font-size: 10px; color: #c84; background: #1a0e04; padding: 4px 8px; border-bottom: 1px solid #2a1a08; }

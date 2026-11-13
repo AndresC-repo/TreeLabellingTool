@@ -130,6 +130,39 @@ def _crs_from_geokeys(header):
                         geodetic_crs=base, cartesian_cs=Cartesian2DCS(axis=axes))
 
 
+def file_crs(las_path):
+    """pyproj CRS of a LAS/LAZ file (horizontal part), or None when the file has none."""
+    import laspy
+    try:
+        with laspy.open(str(las_path)) as f:
+            h = f.header
+            try:
+                crs = h.parse_crs()
+            except Exception:
+                crs = None
+            if crs is None:
+                try:
+                    crs = _crs_from_geokeys(h)
+                except Exception:
+                    crs = None
+    except Exception:
+        return None
+    if crs is not None and crs.is_compound:
+        crs = next((c for c in crs.sub_crs_list if c.is_projected or c.is_geographic), crs)
+    return crs
+
+
+def crs_label(crs) -> str:
+    """Short name of a CRS for tables and CSV files: 'EPSG:26917' when it has a code, else its name."""
+    if crs is None:
+        return ""
+    try:
+        code = crs.to_epsg()
+    except Exception:
+        code = None
+    return f"EPSG:{code}" if code else str(getattr(crs, "name", "") or "custom")
+
+
 def tile_location(las_path) -> dict | None:
     """{"lat", "lon", "state", "city", "city_km"} for a LAS/LAZ file, or None without a usable CRS."""
     import laspy

@@ -284,11 +284,21 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
 @router.post("/{session_id}/{patch_id}/tree-metrics", response_model=TreeMetricsResponse)
 def tree_metrics(session_id: str, patch_id: str, req: TreeMetricsRequest):
     """Compute per-tree crown metrics (height, crown width, area, etc.) from instance labels."""
-    from services.tree_metrics import compute_tree_metrics
+    from services.tree_metrics import compute_tree_metrics, metrics_to_csv, QUALITY_NOTES
+    from services.location import file_crs, crs_label
 
     patch_path = get_patch_path(session_id, patch_id)
     if not patch_path.exists():
         raise HTTPException(404, "Patch not found")
+
+    # Coordinate system for lat/lon: the patch file's own, else the tile it was cut from
+    crs = file_crs(patch_path)
+    if crs is None:
+        try:
+            from services.las_reader import get_las_path
+            crs = file_crs(get_las_path(session_id))
+        except Exception:
+            crs = None
 
     try:
         las = laspy.read(str(patch_path))
@@ -315,11 +325,14 @@ def tree_metrics(session_id: str, patch_id: str, req: TreeMetricsRequest):
             dtm_x_range=req.dtm_x_range,
             dtm_y_range=req.dtm_y_range,
             unit_scale=get_session_units(session_id)["scale"],
+            crs=crs,
         )
     except Exception as e:
         raise HTTPException(500, f"Metrics error: {e}")
 
-    return TreeMetricsResponse(trees=metrics)
+    label = crs_label(crs)
+    csv_text = metrics_to_csv(metrics, {"patch": patch_id, "crs": label})
+    return TreeMetricsResponse(trees=metrics, crs=label, csv=csv_text, quality_notes=QUALITY_NOTES)
 
 
 @router.get("/{session_id}/{patch_id}/next-label")

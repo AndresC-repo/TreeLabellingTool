@@ -107,7 +107,7 @@ class SegmentTreesResponse(BaseModel):
 
 class TreeMetricsRequest(BaseModel):
     labels: List[int]              # per-point instance labels (201+=instances)
-    cell_size: float = 1.5
+    cell_size: float = 1.5         # no longer used by the metrics (kept for old clients)
     dtm_grid: Optional[List[float]] = None
     dtm_rows: int = 64
     dtm_cols: int = 64
@@ -117,18 +117,35 @@ class TreeMetricsRequest(BaseModel):
     dtm_y_range: float = 1.0
 
 class TreeMetrics(BaseModel):
+    """One tree. Lengths in metres, areas in m², volumes in m³ (see services/tree_metrics.py)."""
     id: int
-    height: float         # Ht — max height above terrain (m)
-    base_height: float    # Hb — estimated crown base height (m)
-    crown_length: float   # Lc — live crown length = Ht − Hb (m)
-    crown_width: float    # CW — area-derived circular equivalent diameter (m)
-    width_ew: float       # raw E-W extent (m) — outlier-sensitive
-    width_ns: float       # raw N-S extent (m) — outlier-sensitive
-    crown_area: float     # footprint area (m²)
+    # position: crown centre and tree top, in file coordinates and (with a CRS) WGS84
+    x: float
+    y: float
+    top_x: float
+    top_y: float
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    top_lat: Optional[float] = None
+    top_lon: Optional[float] = None
+    height: float            # highest point above the ground under it
+    height_p95: float
+    height_p50: float
+    height_p10: float
+    crown_area: float        # convex outline seen from above
+    crown_diameter: float    # diameter of a circle with that area
+    crown_volume: float      # 3D convex hull
+    ground_elevation: float
+    ground_source: str       # ground_points | grid | lowest_point
     point_count: int
+    point_density: float     # points per m² of crown
+    quality: str             # "ok" or reasons separated by ";" (tree_metrics.QUALITY_NOTES)
 
 class TreeMetricsResponse(BaseModel):
     trees: List[TreeMetrics]
+    crs: str = ""            # coordinate system of x/y, e.g. "EPSG:26917"; "" = unknown (no lat/lon)
+    csv: str = ""            # the same table as CSV text, ready to download
+    quality_notes: dict = {}
 
 class PredictRequest(BaseModel):
     version: str = "metric"   # "metric" (latest) | "metric_old"
