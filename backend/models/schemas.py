@@ -60,6 +60,13 @@ class SaveResponse(BaseModel):
     saved_to: Optional[str] = None          # path in the labels folder (None if not written)
     labels_folder_connected: bool = False
 
+class SegmentTreesNNRequest(BaseModel):
+    labels: List[int]                       # tree mask: >= 100 = tree
+    min_peak_distance: Optional[float] = None   # m; None = setting from clustering json
+    sigma: Optional[float] = None               # m
+    min_crown_area: Optional[float] = None      # m²
+    min_points: Optional[int] = None
+
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
     # Defaults = the panel's tuned defaults (InferenceLegend.vue), so a call without the

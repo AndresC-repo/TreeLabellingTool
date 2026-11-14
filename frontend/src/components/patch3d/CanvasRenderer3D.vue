@@ -176,7 +176,8 @@ const lasso = useLasso3D(camera, renderer)
 
 // Models from the backend, with the date each was last updated on Hugging Face.
 // Shown immediately with these defaults; dates fill in when /models answers.
-const inferenceVersions = computed(() => store.models)
+// Instance_model.pth only splits trees (Split trees → Instance NN), so it is not offered here
+const inferenceVersions = computed(() => store.models.filter(m => m.role !== 'instance' && m.id !== 'instance'))
 const fmtDay = iso => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
 const modelKind = v => `threshold ${v.threshold}${v.instance_heads === false ? ' · tree/non-tree only' : ''}`
 function modelDesc(v) {

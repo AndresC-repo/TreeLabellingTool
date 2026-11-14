@@ -106,6 +106,7 @@
             <tr>
               <th @click="sortBy('file')">File</th>
               <th @click="sortBy('region')">Region</th>
+              <th title="Centre of the patch in WGS84 (lat, lon). Click to open the spot in OpenStreetMap">Centre</th>
               <th @click="sortBy('labeller')" title="Who labelled it (editable)">By</th>
               <th @click="sortBy('trees')" class="num">Trees</th>
               <th @click="sortBy('min_height')" class="num" title="Height of the smallest labelled tree, metres above the ground under it">Smallest</th>
@@ -136,6 +137,14 @@
                 <div v-if="p.source" class="sub">{{ p.source }} · patch {{ p.patch_number }}</div>
               </td>
               <td>{{ regionOf(p) || '—' }}</td>
+              <td class="latlon">
+                <template v-if="p.lat != null">
+                  <a :href="osmUrl(p)" target="_blank" rel="noopener" :class="{ approx: p.latlon_source === 'tile' }"
+                     :title="latlonTitle(p)" @dblclick.stop>{{ p.latlon_source === 'tile' ? '≈ ' : '' }}{{ p.lat.toFixed(5) }}, {{ p.lon.toFixed(5) }}</a>
+                  <button class="copy" title="Copy lat, lon" @click.stop="copyLatLon(p)" @dblclick.stop>⧉</button>
+                </template>
+                <span v-else class="none" :title="p.file ? 'No coordinate system in this file or its tile — rescan after loading the tile, or the position is unknown' : ''">—</span>
+              </td>
               <td>
                 <input class="short" :value="p.labeller" placeholder="—" maxlength="16"
                        @change="setPatch(p, { labeller: $event.target.value.trim() })" @keydown.enter="$event.target.blur()" />
@@ -165,7 +174,7 @@
                 </button>
               </td>
             </tr>
-            <tr v-if="!sortedPatches.length"><td colspan="10" class="empty">No patches match.</td></tr>
+            <tr v-if="!sortedPatches.length"><td colspan="11" class="empty">No patches match.</td></tr>
           </tbody>
         </table>
       </div>
@@ -436,6 +445,17 @@ const shortOptions = computed(() => [...new Set([2, shortM.value, 3, 4, 5])].sor
 const shortLimit = computed(() => filters.shortBelow || shortM.value)
 const minHeight = p => (p.tree_heights?.length ? p.tree_heights[0] : null)
 const shortCount = (p, lim = shortLimit.value) => (p.tree_heights ?? []).filter(h => h < lim).length
+const osmUrl = p => `https://www.openstreetmap.org/?mlat=${p.lat}&mlon=${p.lon}#map=19/${p.lat}/${p.lon}`
+function latlonTitle(p) {
+  return (p.latlon_source === 'tile'
+    ? "Approximate: this file has no coordinate system, so this is the centre of the tile it was cut from"
+    : 'Centre of the patch, from the file\'s coordinate system') + '\nClick to open in OpenStreetMap'
+}
+async function copyLatLon(p) {
+  const text = `${p.lat}, ${p.lon}`
+  try { await navigator.clipboard.writeText(text); toast.success('Copied ' + text) }
+  catch { toast.error('Could not copy — ' + text) }
+}
 function heightTitle(p) {
   if (!p.tree_heights?.length) return p.file ? 'Rescan the labels folder to measure tree heights' : ''
   const hs = p.tree_heights.map(h => h.toFixed(1)).join(', ')
@@ -551,6 +571,13 @@ button:disabled { opacity: 0.6; cursor: default; }
 .short-link { display: block; margin-top: 6px; background: none; border: none; padding: 0; color: #fb4; font-size: 11.5px; cursor: pointer; text-align: left; }
 .short-link:hover, .short-link.sel { text-decoration: underline; color: #fd8; }
 td.height { white-space: nowrap; }
+td.latlon { white-space: nowrap; font: 11.5px ui-monospace, monospace; }
+td.latlon a { color: #8cf; text-decoration: none; }
+td.latlon a:hover { text-decoration: underline; }
+td.latlon a.approx { color: #9aa6c4; font-style: italic; }
+td.latlon .copy { background: none; border: none; color: #678; cursor: pointer; font-size: 11px; padding: 0 3px; }
+td.latlon .copy:hover { color: #cde; }
+td.latlon .none { color: #556; }
 .badge.short { background: #4a3510; color: #fc6; border-color: #7a5a20; }
 select.active { border-color: #c90; color: #fd8; }
 .card-title { font-size: 11px; color: #889; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }

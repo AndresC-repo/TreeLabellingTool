@@ -83,7 +83,7 @@ export const HELP = {
         steps: [
           '<b>Run ▾</b> (or <b>I</b>): the neural network marks tree / non-tree points.',
           'Drag the <b>Tree threshold</b> slider to change how sure the model must be: left = more trees, right = fewer. It updates instantly; ↺ goes back to the model\'s default.',
-          '<b>Segment Trees (CHM)</b> splits them into single trees. With <b>Live update</b> on, moving a slider re-runs it at once; <b>Reset defaults</b> goes back to the values tuned on your labelled patches. <b>Apply to Labels</b> segments first if the trees are not split yet.',
+          '<b>Split trees</b> splits them into single trees, with the <b>Watershed (CHM)</b> or the <b>Instance NN</b> (Instance_model.pth; it keeps the tree mask you see and only decides which tree each point belongs to). With <b>Live update</b> on, moving a slider re-runs it at once; <b>Reset defaults</b> goes back to the values tuned on your labelled patches. <b>Split & Apply to Labels</b> splits first if the trees are not split yet.',
           'Looks right? <b>Apply to Labels</b>, then fix mistakes by hand with the lasso.',
         ],
       },

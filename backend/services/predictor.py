@@ -63,6 +63,20 @@ _MODEL_CONFIGS: dict[str, dict] = {
         'threshold':          0.75,
         'instance_heads':     True,    # checked again when the file is loaded
     },
+    # Splits trees only (offsets). Never used for tree / non-tree: the mask comes from
+    # best_model_m.pth (E12). See services/instance_nn.py.
+    'instance': {
+        'filename':           'Instance_model.pth',
+        'in_channels':        3,
+        'use_intensity':      False,
+        'use_classification': False,
+        'input_units':        'm',
+        'label':              'Instance NN',
+        'tag':                'splits trees',
+        'role':               'instance',
+        'threshold':          0.5,
+        'instance_heads':     True,
+    },
 }
 
 _loaded: dict[str, SegmentAnyTree] = {}
@@ -118,6 +132,7 @@ def model_catalog(refresh: bool = False) -> list[dict]:
     for vid, c in _MODEL_CONFIGS.items():
         i = info.get(c['filename'], {"available": False, "updated": None, "commit_title": None, "size": None})
         out.append({"id": vid, "label": c['label'], "tag": c.get('tag', ''), "filename": c['filename'],
+                    "role": c.get('role', 'semantic'),
                     "input_units": c['input_units'], "threshold": c.get('threshold', 0.5),
                     "instance_heads": bool(c.get('instance_heads', True) and _has_heads.get(vid, True)),
                     "source": source, **i})
@@ -507,6 +522,9 @@ def predict(
         raise ValueError(f"Unknown version '{version}'. Choose from {VALID_VERSIONS}.")
 
     cfg = _MODEL_CONFIGS[version]
+    if cfg.get('role') == 'instance':   # see services/instance_nn.py
+        raise ValueError(f"{cfg['filename']} only splits trees (Split trees: Instance NN); "
+                         "run inference with a tree / non-tree model")
     if cfg['use_intensity'] and intensity is None:
         raise ValueError(f"version='{version}' requires intensity values")
     if cfg['use_classification'] and classification is None:
@@ -644,6 +662,9 @@ def predict_instances(
         raise ValueError(f"Unknown version '{version}'. Choose from {VALID_VERSIONS}.")
 
     cfg = _MODEL_CONFIGS[version]
+    if cfg.get('role') == 'instance':   # see services/instance_nn.py
+        raise ValueError(f"{cfg['filename']} only splits trees (Split trees: Instance NN); "
+                         "run inference with a tree / non-tree model")
     if cfg['use_intensity'] and intensity is None:
         raise ValueError(f"version='{version}' requires intensity values")
     if cfg['use_classification'] and classification is None:

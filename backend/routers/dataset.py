@@ -196,11 +196,13 @@ def patches_csv():
     ov = dreg.overview()
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["file", "source", "patch", "labeller", "state", "city", "trees", "points", "status",
-                "units", "notes"])
+    w.writerow(["file", "source", "patch", "labeller", "state", "city", "lat", "lon", "latlon_source",
+                "trees", "points", "status", "units", "notes"])
     for p in ov["patches"]:
         w.writerow([p.get("file") or "", p.get("source") or "", p.get("patch_number") or "",
-                    p.get("labeller") or "", p.get("state") or "", p.get("city") or "", p.get("trees"),
+                    p.get("labeller") or "", p.get("state") or "", p.get("city") or "",
+                    "" if p.get("lat") is None else p["lat"], "" if p.get("lon") is None else p["lon"],
+                    p.get("latlon_source") or "", p.get("trees"),
                     p.get("points") or "", p.get("status") or "", p.get("units") or "", p.get("notes") or ""])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",

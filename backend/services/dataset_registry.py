@@ -311,7 +311,7 @@ def record_export(key: str, file_name: str, trees: int, units: str | None) -> di
         if f.exists():
             stats = _file_stats(f, units)
             p.update({"tree_heights": stats["tree_heights"], "height_units": stats["height_units"],
-                      "heights_v": stats.get("heights_v"),
+                      "heights_v": stats.get("heights_v"), "lat": stats.get("lat"), "lon": stats.get("lon"),
                       "points": stats["points"] or p.get("points"),
                       "file_sig": [f.stat().st_size, round(f.stat().st_mtime, 1)]})
         if not p.get("labeller") and config.LABELLER:
@@ -451,7 +451,8 @@ def _file_stats(path: Path, units_hint: str | None = None) -> dict:
         return file_stats(path, units_hint)
     except Exception as e:
         print(f"[registry] could not read {path.name}: {e}")
-        return {"trees": -1, "points": 0, "tree_heights": [], "height_units": "", "heights_v": HEIGHTS_VERSION}
+        return {"trees": -1, "points": 0, "tree_heights": [], "height_units": "", "heights_v": HEIGHTS_VERSION,
+                "lat": None, "lon": None}
 
 
 def scan_labels_folder() -> dict:
@@ -506,6 +507,14 @@ def overview() -> dict:
         src = sources.get(p.get("source") or "", {})
         p["city"] = src.get("city") or p.get("city", "")
         p["state"] = src.get("state") or p.get("state") or guess_state(p.get("file") or "")
+        # Centre of the patch: from its own file; if the file has no coordinate system,
+        # the centre of the tile it was cut from (approximate, within about a kilometre)
+        if p.get("lat") is not None:
+            p["latlon_source"] = "patch"
+        elif src.get("lat") is not None:
+            p["lat"], p["lon"], p["latlon_source"] = src["lat"], src["lon"], "tile"
+        else:
+            p["latlon_source"] = ""
         sid, pid = p.get("session_id"), p.get("patch_id")
         p["openable"] = bool(sid and pid and (get_session_dir(sid) / "patches" / f"{pid}.las").exists())
         patches.append(p)

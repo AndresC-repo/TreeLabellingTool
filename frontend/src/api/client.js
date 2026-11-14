@@ -116,6 +116,11 @@ export const getTreeMetrics = (sessionId, patchId, labels, cell_size, dtmGrid) =
   return api.post(`/patches/${sessionId}/${patchId}/tree-metrics`, payload)
 }
 
+// Split the tree points (labels >= 100) with Instance_model.pth. Same response as segmentTrees.
+export const segmentTreesNN = (sessionId, patchId, labels, params = {}) =>
+  api.post(`/patches/${sessionId}/${patchId}/segment-trees-nn`, { labels, ...params })
+export const getInstanceSettings = () => api.get('/models/instance-settings')
+
 // Every point with fromLabel gets toLabel (0 = unlabel). Undoable.
 export const relabelAll = (sessionId, patchId, fromLabel, toLabel) =>
   api.post(`/patches/${sessionId}/${patchId}/relabel-all`, { from_label: fromLabel, to_label: toLabel })

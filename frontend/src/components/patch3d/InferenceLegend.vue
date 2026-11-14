@@ -74,7 +74,7 @@
     </button>
 
     <p v-if="noInstanceHeads" class="no-heads-note">
-      {{ modelLabel }} only separates tree / non-tree. Use <b>Segment Trees (CHM)</b> below to split the trees.
+      {{ modelLabel }} only separates tree / non-tree. Use <b>Split trees</b> below (Watershed or Instance NN) to split the trees.
     </p>
     <template v-else>
     <!-- Instance Segmentation Parameters — shown just above Run Instance Segmentation -->
@@ -118,23 +118,33 @@
       class="apply-btn"
       :disabled="applying || store.segmenting || instRunning"
       @click="applyToLabels"
-      :title="needsSegmenting ? 'Splits the trees with Segment Trees (CHM) first, then writes the individual trees into the Labels layer' : 'Write the trees shown into the Labels layer so they can be saved'"
+      :title="needsSegmenting ? 'Splits the trees first (' + (splitMethod === 'nn' ? 'Instance NN' : 'Watershed') + '), then writes the individual trees into the Labels layer' : 'Write the trees shown into the Labels layer so they can be saved'"
     >
-      {{ applying ? (store.segmenting ? 'Segmenting…' : 'Applying…') : needsSegmenting ? 'Segment & Apply to Labels' : 'Apply to Labels' }}
+      {{ applying ? (store.segmenting ? 'Segmenting…' : 'Applying…') : needsSegmenting ? 'Split & Apply to Labels' : 'Apply to Labels' }}
     </button>
     <p v-if="applied" class="ok">Applied — switch to Labels view to verify</p>
 
     <!-- ── CHM Watershed ─────────────────────────────────────────────── -->
-    <div class="section-divider">CHM Watershed</div>
+    <div class="section-divider">Split trees</div>
+    <div class="method-toggle" role="radiogroup" aria-label="How to split the trees">
+      <button :class="{ on: splitMethod === 'watershed' }" @click="splitMethod = 'watershed'"
+              title="Height-model watershed: tree tops from the canopy height model">Watershed (CHM)</button>
+      <button :class="{ on: splitMethod === 'nn' }" @click="splitMethod = 'nn'"
+              :title="nnModelTitle">Instance NN</button>
+    </div>
+    <p v-if="splitMethod === 'nn'" class="nn-note" :title="nnModelTitle">
+      Instance_model.pth{{ nnModelDate ? ' · ' + nnModelDate : '' }} — splits the points shown as tree; the tree mask stays as it is.
+    </p>
     <p v-if="store.unitSource === 'uncertain'" class="units-warning" :title="unitTitle">
       ⚠ Units uncertain — this file may be in feet. Choose the right “Data units” in CHM params.
     </p>
 
       <div v-if="hasSemanticLabels" class="segment-section">
         <div class="section-header" @click="paramsOpen = !paramsOpen">
-          <span>CHM params</span>
+          <span>{{ splitMethod === 'nn' ? 'Instance NN settings' : 'CHM params' }}</span>
           <span class="header-right">
             <span
+              v-if="splitMethod === 'watershed'"
               class="help-btn"
               @click.stop="helpOpen = !helpOpen"
               :title="helpOpen ? 'Hide help' : 'What do these parameters do?'"
@@ -143,7 +153,7 @@
           </span>
         </div>
 
-        <div v-if="helpOpen" class="help-box">
+        <div v-if="helpOpen && splitMethod === 'watershed'" class="help-box">
           <div class="help-row"><span class="help-name">Cell size</span><span class="help-desc">Size of each grid cell in metres. Smaller = more detail but more false tree tops. 0.75 m with Smooth window 5 scored best on your labelled patches.</span></div>
           <div class="help-row"><span class="help-name">Smooth window</span><span class="help-desc">Blurs the height model before finding tree tops. Higher = fewer false splits in dense canopy.</span></div>
           <div class="help-row"><span class="help-name">Extra Gauss σ</span><span class="help-desc">Extra smoothing on top of the window filter. Leave at 0 unless the canopy is very noisy.</span></div>
@@ -182,7 +192,7 @@
             </div>
           </div>
           <!-- DTM source indicator -->
-          <div class="dtm-badge" :class="dtmSource === 'external' ? 'dtm-ok' : 'dtm-fallback'">
+          <div v-if="splitMethod === 'watershed'" class="dtm-badge" :class="dtmSource === 'external' ? 'dtm-ok' : 'dtm-fallback'">
             <span class="dtm-icon">{{ dtmSource === 'external' ? '✓' : '!' }}</span>
             <span v-if="dtmSource === 'external'">Using DTM from point cloud view</span>
             <span v-else>No ground points — using Z minimum fallback</span>
@@ -192,16 +202,16 @@
               <input type="checkbox" v-model="liveSeg" /> Live update
             </label>
             <button class="reset-defaults" :disabled="isDefault" @click="resetParams"
-                    title="Defaults tuned on 48 of your labelled patches (296 trees)">Reset defaults</button>
+                    :title="splitMethod === 'nn' ? 'Settings from ' + nnSettingsSource : 'Defaults tuned on your labelled patches'">Reset defaults</button>
           </div>
-          <div v-for="c in PARAMS" :key="c.key" class="slider-row" :class="{ changed: params[c.key] !== DEFAULTS[c.key] }">
+          <div v-for="c in activeParams" :key="c.key" class="slider-row" :class="{ changed: activeValues[c.key] !== activeDefaults[c.key] }">
             <div class="slider-head">
               <span class="param-name" :title="c.tip">{{ c.name }}</span>
               <input class="slider-val" type="number" :min="c.min" :max="c.max" :step="c.step"
-                     :value="params[c.key]" @change="setParam(c, $event.target.value)" />
+                     :value="activeValues[c.key]" @change="setParam(c, $event.target.value)" />
               <span class="slider-unit">{{ c.unit }}</span>
             </div>
-            <input type="range" :min="c.min" :max="c.max" :step="c.step" :value="params[c.key]"
+            <input type="range" :min="c.min" :max="c.max" :step="c.step" :value="activeValues[c.key]"
                    :title="c.tip" @input="setParam(c, $event.target.value)" />
           </div>
         </div>
@@ -210,13 +220,20 @@
           class="segment-btn"
           :disabled="store.segmenting || applying"
           @click="runSegmentation"
-          title="Cluster tree points into individual instances using CHM local maxima"
+          :title="splitMethod === 'nn' ? 'Split the tree points with the instance network (offsets to the tree centre)' : 'Cluster tree points into individual instances using CHM local maxima'"
         >
-          {{ store.segmenting ? 'Segmenting…' : 'Segment Trees (CHM)' }}
+          {{ store.segmenting ? 'Segmenting…' : splitMethod === 'nn' ? 'Split Trees (Instance NN)' : 'Segment Trees (CHM)' }}
         </button>
         <p v-if="liveSeg && !segStats && !store.segmenting" class="live-hint">Move a slider or press the button — results update live.</p>
         <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
-        <div v-if="segStats" class="seg-stats">
+        <div v-if="segStats && segStats.method === 'instance_nn'" class="seg-stats">
+          <div class="seg-row" title="Tree points that no tree centre claimed (crown too small, or too far from a centre) — shown as non-tree">
+            <span>Tree points without a tree</span>
+            <span>{{ (segStats.tree_points_without_tree ?? 0).toLocaleString() }} pts</span>
+          </div>
+          <div class="seg-row"><span>Settings</span><span class="src">{{ segStats.settings_source }}</span></div>
+        </div>
+        <div v-else-if="segStats" class="seg-stats">
           <p v-if="segStats.warning" class="seg-warning">⚠ {{ segStats.warning }}</p>
           <div class="seg-row" title="Area of CHM cells at or above Min height">
             <span>Canopy</span>
@@ -336,7 +353,7 @@
 import { ref, computed, reactive, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { usePatch3DStore } from '../../stores/patch3d.js'
-import { applyLabelsBulk, segmentTrees, getTreeMetrics, predictInstances, predictPatch, dtmWorldParams, setUnits } from '../../api/client.js'
+import { applyLabelsBulk, segmentTrees, segmentTreesNN, getInstanceSettings, getTreeMetrics, predictInstances, predictPatch, dtmWorldParams, setUnits } from '../../api/client.js'
 import { UNIT_NAMES, UNIT_SCALE } from '../../stores/patch3d.js'
 
 const emit = defineEmits(['segment-done', 'inference-edited', 'labels-bulk-applied'])
@@ -450,18 +467,51 @@ const PARAMS = [
   { key: 'understory_gap', name: 'Understory gap', unit: 'm', min: 0, max: 10, step: 0.5,
     tip: 'Splits off trees standing under another crown when there is an empty height layer at least this tall. 0 = off.' },
 ]
-const isDefault = computed(() => PARAMS.every(c => params[c.key] === DEFAULTS[c.key]))
+// ── Instance NN (Instance_model.pth): clustering settings, metres ──
+// Defaults = the clustering JSON uploaded next to the model (I02: tuned on val).
+const NN_FALLBACK = { min_peak_distance: 4.0, sigma: 0.75, min_crown_area: 2.0, min_points: 10 }
+const nnDefaults = reactive({ ...NN_FALLBACK })
+const nnParams = reactive({ ...NN_FALLBACK })
+const nnSettingsSource = ref('built-in I02 settings')
+const NN_PARAMS = [
+  { key: 'min_peak_distance', name: 'Min tree spacing', unit: 'm', min: 1, max: 10, step: 0.5,
+    tip: 'Two tree centres are never closer than this. Larger = fewer, bigger trees.' },
+  { key: 'sigma', name: 'Vote smoothing', unit: 'm', min: 0.25, max: 2, step: 0.25,
+    tip: 'Blur of the centre votes before the peaks are found. Larger merges centres that are close together.' },
+  { key: 'min_crown_area', name: 'Min crown area', unit: 'm²', min: 0, max: 30, step: 0.5,
+    tip: 'Trees with a smaller crown are dropped; their points join a nearby tree or become non-tree.' },
+  { key: 'min_points', name: 'Min pts / tree', unit: 'pts', min: 1, max: 300, step: 1,
+    tip: 'Trees with fewer points are dropped (same as above).' },
+]
+const splitMethod = ref((() => { try { return localStorage.getItem('labellingTool.splitMethod') || 'watershed' } catch { return 'watershed' } })())
+watch(splitMethod, v => { try { localStorage.setItem('labellingTool.splitMethod', v) } catch { /* ignore */ } })
+const nnModel = computed(() => store.models.find(m => m.role === 'instance' || m.id === 'instance'))
+const nnModelDate = computed(() => nnModel.value?.updated
+  ? 'updated ' + new Date(nnModel.value.updated).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '')
+const nnModelTitle = computed(() => 'Instance_model.pth (run I02): uses only its XY offsets towards the tree centre, '
+  + 'then groups the points like the evaluation (cluster_trees). The tree / non-tree mask is the one on screen '
+  + '(from Run Inference with XYZ (m) latest). Settings: ' + nnSettingsSource.value)
+getInstanceSettings().then(r => {
+  const p = r.data?.params || {}
+  for (const k of Object.keys(NN_FALLBACK)) if (p[k] != null) { nnDefaults[k] = p[k]; nnParams[k] = p[k] }
+  nnSettingsSource.value = r.data?.source || nnSettingsSource.value
+}).catch(() => { /* keep fallback */ })
+
+const activeParams = computed(() => splitMethod.value === 'nn' ? NN_PARAMS : PARAMS)
+const activeValues = computed(() => splitMethod.value === 'nn' ? nnParams : params)
+const activeDefaults = computed(() => splitMethod.value === 'nn' ? nnDefaults : DEFAULTS)
+const isDefault = computed(() => activeParams.value.every(c => activeValues.value[c.key] === activeDefaults.value[c.key]))
 function setParam(c, raw) {
   const v = Number(raw)
   if (!Number.isFinite(v)) return
-  params[c.key] = Math.min(c.max, Math.max(c.min, v))
+  activeValues.value[c.key] = Math.min(c.max, Math.max(c.min, v))
 }
-function resetParams() { Object.assign(params, DEFAULTS) }
+function resetParams() { Object.assign(activeValues.value, activeDefaults.value) }
 
 // ── Live update: re-run the segmentation shortly after a setting changes ──
 const liveSeg = ref(true)
 let liveTimer = null, rerun = false
-watch(params, () => {
+watch([params, nnParams, splitMethod], () => {
   if (!liveSeg.value || !store.semanticLabels) return
   clearTimeout(liveTimer)
   liveTimer = setTimeout(() => {
@@ -640,14 +690,15 @@ async function runSegmentation() {
   store.segmentationRejectedPeaks = []
   segStats.value = null
   try {
-    const payload = { ...params, ...(store.dtmGrid ? dtmWorldParams(store.dtmGrid) : {}) }
-
-    const res = await segmentTrees(
-      route.params.id,
-      route.params.patchId,
-      Array.from(store.semanticLabels),
-      payload,
-    )
+    const nn = splitMethod.value === 'nn'
+    const res = nn
+      ? await segmentTreesNN(route.params.id, route.params.patchId, Array.from(store.semanticLabels), { ...nnParams })
+      : await segmentTrees(
+          route.params.id,
+          route.params.patchId,
+          Array.from(store.semanticLabels),
+          { ...params, ...(store.dtmGrid ? dtmWorldParams(store.dtmGrid) : {}) },
+        )
     const { labels, tree_count } = res.data
 
     store.inferenceLabels       = labels
@@ -678,12 +729,13 @@ async function runSegmentation() {
       tree_count === 1 ? '1 tree instance found' :
       `${tree_count} tree instances found`
     if (tree_count > 0)
-      instanceMessage.value += ` — ${store.segmentationSeedPeaks.length} CHM seeds, ${store.segmentationPeaks.length} valid peaks`
+      instanceMessage.value += nn ? ' — Instance NN'
+        : ` — ${store.segmentationSeedPeaks.length} CHM seeds, ${store.segmentationPeaks.length} valid peaks`
 
     emit('segment-done', labels)
   } catch (err) {
-    console.error('CHM segmentation failed:', err)
-    instanceMessage.value = 'Segmentation failed — see console'
+    console.error('Tree splitting failed:', err)
+    instanceMessage.value = 'Splitting failed: ' + (err.response?.data?.detail || err.message)
   } finally {
     store.segmenting = false
     if (rerun) { rerun = false; runSegmentation() }
@@ -740,6 +792,12 @@ async function applyToLabels() {
 </script>
 
 <style scoped>
+.method-toggle { display: flex; gap: 0; margin: 4px 0 6px; border: 1px solid #36406a; border-radius: 5px; overflow: hidden; }
+.method-toggle button { flex: 1; background: #141a33; color: #9ab; border: none; padding: 5px 4px; font-size: 11.5px; cursor: pointer; }
+.method-toggle button + button { border-left: 1px solid #36406a; }
+.method-toggle button.on { background: #2d4580; color: #fff; font-weight: 600; }
+.nn-note { font-size: 10.5px; color: #8fa3c8; margin: 0 0 6px; line-height: 1.4; }
+.seg-row .src { font-size: 10px; color: #8a96b8; text-align: right; }
 .live-row { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 6px; font-size: 11.5px; color: #bcd; }
 .live-row label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
 .reset-defaults { background: none; border: 1px solid #36406a; color: #9ab; border-radius: 4px; font-size: 10.5px; padding: 2px 7px; cursor: pointer; }

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, FileResponse
 from pydantic import BaseModel
-from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, RelabelSelectionRequest, RelabelSelectionResponse, RelabelAllRequest, UndoResponse, PredictRequest
+from models.schemas import ExtractionRequest, ExtractionResponse, Bounds, LabelRequest, LabelResponse, BulkLabelRequest, SaveRequest, SaveResponse, SegmentTreesRequest, SegmentTreesResponse, TreeMetricsRequest, TreeMetricsResponse, RelabelSelectionRequest, RelabelSelectionResponse, RelabelAllRequest, SegmentTreesNNRequest, UndoResponse, PredictRequest
 from services.patch_extractor import extract_patch
 from services import label_manager as lm
 from services.las_reader import get_session_dir
@@ -207,6 +207,32 @@ def apply_labels_bulk(session_id: str, patch_id: str, req: BulkLabelRequest):
         raise HTTPException(400, str(e))
     reg.mark_labelled(session_id, patch_id)
     return result
+
+
+@router.post("/{session_id}/{patch_id}/segment-trees-nn", response_model=SegmentTreesResponse)
+def segment_trees_nn(session_id: str, patch_id: str, req: SegmentTreesNNRequest):
+    """Split the given tree points into single trees with Instance_model.pth (offsets) +
+    cluster_trees. Same response as segment-trees. Does not change the label state."""
+    from services.instance_nn import split_trees
+    patch_path = get_patch_path(session_id, patch_id)
+    if not patch_path.exists():
+        raise HTTPException(404, "Patch not found")
+    las = laspy.read(str(patch_path))
+    mask = np.asarray(req.labels, dtype=np.int32) >= 100
+    if len(mask) != len(las.points):
+        raise HTTPException(400, f"Label array length {len(mask)} does not match patch point count {len(las.points)}")
+    params = {k: getattr(req, k) for k in ("min_peak_distance", "sigma", "min_crown_area", "min_points")}
+    try:
+        r = split_trees(f"{session_id}:{patch_id}", np.asarray(las.x), np.asarray(las.y), np.asarray(las.z),
+                        np.asarray(las.classification), mask, get_session_units(session_id)["scale"],
+                        ground_labels=lm.get_labels(patch_id), params=params)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        raise HTTPException(500, f"Instance network failed: {e}")
+    return SegmentTreesResponse(
+        labels=r["labels"].tolist(), tree_count=r["tree_count"], peaks=r["tops"], seed_peaks=[],
+        stats={"method": "instance_nn", "settings": r["settings"], "settings_source": r["settings_source"],
+               "tree_points_without_tree": r["unassigned"]})
 
 
 @router.post("/{session_id}/{patch_id}/segment-trees", response_model=SegmentTreesResponse)

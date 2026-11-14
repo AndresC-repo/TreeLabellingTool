@@ -11,7 +11,7 @@ from scipy.spatial import cKDTree
 
 from services.units import UNITS, detect_units
 
-HEIGHTS_VERSION = 3          # bump to make the next rescan re-measure every file
+HEIGHTS_VERSION = 4          # 4: + patch centre lat/lon          # bump to make the next rescan re-measure every file
 SHORT_TREE_M = 2.5          # trees below this are flagged in the Dataset overview
 MAX_PLAUSIBLE_TREE_M = 45.0  # taller usually means feet read as metres
 
@@ -69,7 +69,17 @@ def file_stats(path, units_hint: str | None = None) -> dict:
     if how == "guess" and hs and hs[-1] > MAX_PLAUSIBLE_TREE_M:
         code = "ftUS"
         hs = [h * UNITS["ftUS"]["scale"] for h in hs]
+    # Patch centre (bounding-box centre) in WGS84, from the file's own coordinate system
+    centre = {"lat": None, "lon": None}
+    try:
+        from services.location import tile_location
+        loc = tile_location(path)
+        if loc:
+            centre = {"lat": loc["lat"], "lon": loc["lon"]}
+    except Exception:
+        pass
     return {
+        **centre,
         "trees": int(np.unique(lab[lab >= 100]).size),
         "points": int(len(las.points)),
         "tree_heights": [round(h, 2) for h in hs],
