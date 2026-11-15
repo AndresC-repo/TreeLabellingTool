@@ -312,6 +312,7 @@ def record_export(key: str, file_name: str, trees: int, units: str | None) -> di
             stats = _file_stats(f, units)
             p.update({"tree_heights": stats["tree_heights"], "height_units": stats["height_units"],
                       "heights_v": stats.get("heights_v"), "lat": stats.get("lat"), "lon": stats.get("lon"),
+                      "density": stats.get("density"), "area_m2": stats.get("area_m2"),
                       "points": stats["points"] or p.get("points"),
                       "file_sig": [f.stat().st_size, round(f.stat().st_mtime, 1)]})
         if not p.get("labeller") and config.LABELLER:
@@ -452,7 +453,7 @@ def _file_stats(path: Path, units_hint: str | None = None) -> dict:
     except Exception as e:
         print(f"[registry] could not read {path.name}: {e}")
         return {"trees": -1, "points": 0, "tree_heights": [], "height_units": "", "heights_v": HEIGHTS_VERSION,
-                "lat": None, "lon": None}
+                "lat": None, "lon": None, "density": None, "area_m2": None}
 
 
 def scan_labels_folder() -> dict:

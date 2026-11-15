@@ -11,7 +11,7 @@ from scipy.spatial import cKDTree
 
 from services.units import UNITS, detect_units
 
-HEIGHTS_VERSION = 4          # 4: + patch centre lat/lon          # bump to make the next rescan re-measure every file
+HEIGHTS_VERSION = 5          # 4: + patch centre lat/lon, 5: + point density          # bump to make the next rescan re-measure every file
 SHORT_TREE_M = 2.5          # trees below this are flagged in the Dataset overview
 MAX_PLAUSIBLE_TREE_M = 45.0  # taller usually means feet read as metres
 
@@ -69,6 +69,17 @@ def file_stats(path, units_hint: str | None = None) -> dict:
     if how == "guess" and hs and hs[-1] > MAX_PLAUSIBLE_TREE_M:
         code = "ftUS"
         hs = [h * UNITS["ftUS"]["scale"] for h in hs]
+    # Point density: points per m² of ground the patch covers = area of the 2 m cells that
+    # contain points (so lasso / polygon patches are not diluted by the empty corners of their
+    # bounding box; 2 m rather than 1 m so sparse data, ~1 pt/m², has few empty cells)
+    s = UNITS[code]["scale"]
+    xy = np.c_[np.asarray(las.x) * s, np.asarray(las.y) * s]
+    area = 0.0
+    if len(xy):
+        ij = np.floor((xy - xy.min(axis=0)) / 2.0).astype(np.int64)
+        area = 4.0 * len(np.unique(ij[:, 0] * (int(ij[:, 1].max()) + 1) + ij[:, 1]))
+    density = round(len(xy) / area, 1) if area else None
+
     # Patch centre (bounding-box centre) in WGS84, from the file's own coordinate system
     centre = {"lat": None, "lon": None}
     try:
@@ -80,6 +91,8 @@ def file_stats(path, units_hint: str | None = None) -> dict:
         pass
     return {
         **centre,
+        "density": density,          # points / m²
+        "area_m2": round(area),      # ground covered (2 m cells)
         "trees": int(np.unique(lab[lab >= 100]).size),
         "points": int(len(las.points)),
         "tree_heights": [round(h, 2) for h in hs],

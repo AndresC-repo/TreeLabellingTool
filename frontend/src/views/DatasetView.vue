@@ -111,6 +111,7 @@
               <th @click="sortBy('trees')" class="num">Trees</th>
               <th @click="sortBy('min_height')" class="num" title="Height of the smallest labelled tree, metres above the ground under it">Smallest</th>
               <th @click="sortBy('points')" class="num">Points</th>
+              <th @click="sortBy('density')" class="num" title="Point density: points per m² of ground the patch covers">Density</th>
               <th @click="sortBy('status')">Status</th>
               <th>Notes</th>
               <th @click="sortBy('exported_at')">Saved</th>
@@ -157,6 +158,9 @@
                 </template>
               </td>
               <td class="num">{{ p.points ? p.points.toLocaleString() : '' }}</td>
+              <td class="num density" :title="p.density != null ? `${p.points?.toLocaleString()} points on ${p.area_m2?.toLocaleString()} m²` : 'Rescan the labels folder to measure'">
+                {{ p.density != null ? p.density.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '' }}<span v-if="p.density != null" class="unit"> /m²</span>
+              </td>
               <td>
                 <select :value="p.status" class="status" :class="'st-' + slug(p.status)" @change="setPatch(p, { status: $event.target.value })">
                   <option v-for="s in data.patch_statuses" :key="s" :value="s">{{ s }}</option>
@@ -174,7 +178,7 @@
                 </button>
               </td>
             </tr>
-            <tr v-if="!sortedPatches.length"><td colspan="11" class="empty">No patches match.</td></tr>
+            <tr v-if="!sortedPatches.length"><td colspan="12" class="empty">No patches match.</td></tr>
           </tbody>
         </table>
       </div>
@@ -571,6 +575,8 @@ button:disabled { opacity: 0.6; cursor: default; }
 .short-link { display: block; margin-top: 6px; background: none; border: none; padding: 0; color: #fb4; font-size: 11.5px; cursor: pointer; text-align: left; }
 .short-link:hover, .short-link.sel { text-decoration: underline; color: #fd8; }
 td.height { white-space: nowrap; }
+td.density { white-space: nowrap; }
+td.density .unit { color: #667; font-size: 10.5px; }
 td.latlon { white-space: nowrap; font: 11.5px ui-monospace, monospace; }
 td.latlon a { color: #8cf; text-decoration: none; }
 td.latlon a:hover { text-decoration: underline; }
