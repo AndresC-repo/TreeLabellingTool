@@ -66,6 +66,9 @@ class SegmentTreesNNRequest(BaseModel):
     sigma: Optional[float] = None               # m
     min_crown_area: Optional[float] = None      # m²
     min_points: Optional[int] = None
+    # City-pipeline filters (backend/services/postprocess.py); off unless switched on
+    filter_rooftop: bool = False             # remove trees standing on a structure (roof clutter)
+    filter_definition: bool = False          # remove trees outside 2.5-70 m height or under 3 m² crown
 
 class SegmentTreesRequest(BaseModel):
     labels: List[int]            # per-point semantic labels (0=non-tree, 101=tree)
@@ -103,6 +106,9 @@ class SegmentTreesRequest(BaseModel):
     dtm_y_min: float = 0.0
     dtm_x_range: float = 1.0
     dtm_y_range: float = 1.0
+    # City-pipeline filters (backend/services/postprocess.py); off unless switched on
+    filter_rooftop: bool = False             # remove trees standing on a structure (roof clutter)
+    filter_definition: bool = False          # remove trees outside 2.5-70 m height or under 3 m² crown
 
 class SegmentTreesResponse(BaseModel):
     labels: List[int]              # per-point instance labels (0=non-tree, 201+=instances)
@@ -111,6 +117,7 @@ class SegmentTreesResponse(BaseModel):
     seed_peaks: List[List[float]]  # [[x, y, z], ...] — ALL CHM local maxima (watershed seeds)
     rejected_peaks: List[List[float]] = []   # maxima dropped by min_peak_height
     stats: Optional[Dict[str, Any]] = None   # what each step did (counts, warning)
+    removed_peaks: List[List[float]] = []    # tops of trees removed by the city-pipeline filters
 
 class TreeMetricsRequest(BaseModel):
     labels: List[int]              # per-point instance labels (201+=instances)

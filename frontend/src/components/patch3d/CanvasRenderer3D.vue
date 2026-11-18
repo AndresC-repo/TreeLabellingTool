@@ -218,6 +218,7 @@ let controls = null
 let peaksMesh = null      // red dots — valid tree tops (after merge filter)
 let seedPeaksMesh = null  // yellow dots — all CHM local maxima (watershed seeds)
 let rejectedPeaksMesh = null  // grey dots — maxima below min peak height
+let removedPeaksMesh = null   // magenta dots — trees removed by the city-pipeline filters
 let axisRenderer = null
 let axisScene = null
 let axisCamera = null
@@ -420,6 +421,7 @@ function applyThreshold() {
   store.segmentationPeaks = []
   store.segmentationSeedPeaks = []
   store.segmentationRejectedPeaks = []
+  store.segmentationRemovedPeaks = []
   store.predictionLegend = [
     { label: 0,   name: INFERENCE_NAMES[0],   color: _paletteHex(0),   count: labels.length - nTree },
     { label: 101, name: INFERENCE_NAMES[101], color: _paletteHex(101), count: nTree },
@@ -590,6 +592,7 @@ function _rebuildPeaksMeshes() {
   if (peaksMesh)     { scene.value.remove(peaksMesh);     peaksMesh.geometry.dispose();     peaksMesh.material.dispose();     peaksMesh = null }
   if (seedPeaksMesh) { scene.value.remove(seedPeaksMesh); seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose(); seedPeaksMesh = null }
   if (rejectedPeaksMesh) { scene.value.remove(rejectedPeaksMesh); rejectedPeaksMesh.geometry.dispose(); rejectedPeaksMesh.material.dispose(); rejectedPeaksMesh = null }
+  if (removedPeaksMesh) { scene.value.remove(removedPeaksMesh); removedPeaksMesh.geometry.dispose(); removedPeaksMesh.material.dispose(); removedPeaksMesh = null }
 
   const inferenceActive = store.viewMode === 'prediction' || store.viewMode === 'inference-chm'
   if (!inferenceActive) return
@@ -601,6 +604,10 @@ function _rebuildPeaksMeshes() {
   // Yellow smaller dots = ALL CHM local maxima (watershed seeds)
   const sm = _buildPointsMesh(store.segmentationSeedPeaks, 0xffcc00, 6)
   if (sm) { seedPeaksMesh = sm; scene.value.add(seedPeaksMesh) }
+
+  // Magenta dots = tops of trees removed by the city-pipeline filters
+  const xm = _buildPointsMesh(store.segmentationRemovedPeaks, 0xff40ff, 10)
+  if (xm) { removedPeaksMesh = xm; scene.value.add(removedPeaksMesh) }
 
   // Red larger dots = valid tree tops (after min_tree_points merge)
   const pm = _buildPointsMesh(store.segmentationPeaks, 0xff2020, 10)
@@ -661,6 +668,7 @@ watch(() => [store.clipHover, store.clipActive, store.xClipMin, store.xClipMax,
 watch(() => store.segmentationPeaks,     _rebuildPeaksMeshes)
 watch(() => store.segmentationSeedPeaks, _rebuildPeaksMeshes)
 watch(() => store.segmentationRejectedPeaks, _rebuildPeaksMeshes)
+watch(() => store.segmentationRemovedPeaks, _rebuildPeaksMeshes)
 watch(() => [store.originX, store.originY], _rebuildPeaksMeshes)
 watch(() => store.viewMode, _rebuildPeaksMeshes)
 
@@ -732,6 +740,7 @@ onBeforeUnmount(() => {
   if (peaksMesh)     { peaksMesh.geometry.dispose();     peaksMesh.material.dispose() }
   if (seedPeaksMesh) { seedPeaksMesh.geometry.dispose(); seedPeaksMesh.material.dispose() }
   if (rejectedPeaksMesh) { rejectedPeaksMesh.geometry.dispose(); rejectedPeaksMesh.material.dispose() }
+  if (removedPeaksMesh) { removedPeaksMesh.geometry.dispose(); removedPeaksMesh.material.dispose() }
   if (axisAnimId) cancelAnimationFrame(axisAnimId)
   axisRenderer?.dispose()
   dispose()

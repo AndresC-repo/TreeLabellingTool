@@ -229,10 +229,31 @@ def segment_trees_nn(session_id: str, patch_id: str, req: SegmentTreesNNRequest)
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(500, f"Instance network failed: {e}")
-    return SegmentTreesResponse(
-        labels=r["labels"].tolist(), tree_count=r["tree_count"], peaks=r["tops"], seed_peaks=[],
-        stats={"method": "instance_nn", "settings": r["settings"], "settings_source": r["settings_source"],
-               "tree_points_without_tree": r["unassigned"]})
+    stats = {"method": "instance_nn", "settings": r["settings"], "settings_source": r["settings_source"],
+             "tree_points_without_tree": r["unassigned"]}
+    labels, tops, removed, count = r["labels"], r["tops"], [], r["tree_count"]
+    if req.filter_rooftop or req.filter_definition:
+        labels, tops, removed, count, fstats = _pipeline_filters(las, labels, session_id, req)
+        stats.update(fstats)
+    return SegmentTreesResponse(labels=labels.tolist(), tree_count=count, peaks=tops, seed_peaks=[],
+                                removed_peaks=removed, stats=stats)
+
+
+def _pipeline_filters(las, labels, session_id: str, req):
+    """The city pipeline's rooftop test and tree definition (services/postprocess.py)."""
+    from services.postprocess import apply_filters
+    f = apply_filters(np.asarray(las.x), np.asarray(las.y), np.asarray(las.z), np.asarray(las.classification),
+                      labels, get_session_units(session_id)["scale"],
+                      rooftop=req.filter_rooftop, definition=req.filter_definition)
+    new = f["labels"]
+    z = np.asarray(las.z)
+    xs, ys = np.asarray(las.x), np.asarray(las.y)
+    tops = []
+    for tid in np.unique(new[new >= 201]):
+        g = np.flatnonzero(new == tid)
+        t = g[np.argmax(z[g])]
+        tops.append([float(xs[t]), float(ys[t]), float(z[t])])
+    return new, tops, f["removed_tops"], len(tops), f["stats"]
 
 
 @router.post("/{session_id}/{patch_id}/segment-trees", response_model=SegmentTreesResponse)
@@ -297,12 +318,19 @@ def segment_trees(session_id: str, patch_id: str, req: SegmentTreesRequest):
     except Exception as e:
         raise HTTPException(500, f"Segmentation error: {e}")
 
+    rejected = stats.pop("rejected_peaks", [])
+    removed = []
+    peaks = peaks.tolist()
+    if req.filter_rooftop or req.filter_definition:
+        new_labels, peaks, removed, tree_count, fstats = _pipeline_filters(las, np.asarray(new_labels), session_id, req)
+        stats.update(fstats)
     return SegmentTreesResponse(
-        labels=new_labels.tolist(),
+        labels=np.asarray(new_labels).tolist(),
         tree_count=tree_count,
-        peaks=peaks.tolist(),
+        peaks=peaks,
         seed_peaks=seed_peaks.tolist(),
-        rejected_peaks=stats.pop("rejected_peaks", []),
+        rejected_peaks=rejected,
+        removed_peaks=removed,
         stats=stats,
     )
 

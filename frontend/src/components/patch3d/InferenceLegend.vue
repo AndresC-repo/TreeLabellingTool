@@ -216,6 +216,17 @@
           </div>
         </div>
 
+        <!-- City-pipeline filters: the same rules the city pipeline applies, to see what they remove -->
+        <div class="filters-box" title="The same filters the city pipeline applies after the models (urban-tree-detection, src/city). Off = the split result as it is.">
+          <div class="filters-title">City-pipeline filters</div>
+          <label class="filter-row" title="Remove trees standing on a structure: most of their 1 m cells have no ground point within 2 m and their lowest return is at least 2.5 m above the ground (clutter on roofs).">
+            <input type="checkbox" v-model="filters.rooftop" /> Rooftop test
+          </label>
+          <label class="filter-row" title="Remove trees lower than 2.5 m, taller than 70 m, or with a crown under 3 m² (the tree definition of the city pipeline).">
+            <input type="checkbox" v-model="filters.definition" /> Tree definition (2.5–70 m, ≥ 3 m²)
+          </label>
+        </div>
+
         <button
           class="segment-btn"
           :disabled="store.segmenting || applying"
@@ -226,6 +237,20 @@
         </button>
         <p v-if="liveSeg && !segStats && !store.segmenting" class="live-hint">Move a slider or press the button — results update live.</p>
         <p v-if="instanceMessage" class="info-msg">{{ instanceMessage }}</p>
+        <div v-if="segStats && (segStats.filters_rooftop || segStats.filters_definition)" class="seg-stats filters-stats">
+          <div class="seg-row" title="Trees before and after the city-pipeline filters">
+            <span>Trees before → after filters</span>
+            <span>{{ segStats.trees_before_filters ?? 0 }} → {{ segStats.trees_after_filters ?? 0 }}</span>
+          </div>
+          <div v-if="segStats.filters_rooftop" class="seg-row" title="Removed: standing on a structure (magenta dots)">
+            <span>On a structure (roof)</span>
+            <span>{{ segStats.rooftop_unavailable ? 'no ground points: not tested' : segStats.removed_on_structure }}</span>
+          </div>
+          <div v-if="segStats.filters_definition" class="seg-row" title="Removed by the tree definition (magenta dots)">
+            <span>Too low / too tall / small crown</span>
+            <span>{{ segStats.removed_too_low }} / {{ segStats.removed_too_tall }} / {{ segStats.removed_small_crown }}</span>
+          </div>
+        </div>
         <div v-if="segStats && segStats.method === 'instance_nn'" class="seg-stats">
           <div class="seg-row" title="Tree points that no tree centre claimed (crown too small, or too far from a centre) — shown as non-tree">
             <span>Tree points without a tree</span>
@@ -291,6 +316,10 @@
       <div v-if="store.segmentationPeaks.length" class="marker-legend">
         <span class="marker-dot valid-dot"></span>
         <span class="marker-text">Valid tree top (after merge) — {{ store.segmentationPeaks.length }}</span>
+      </div>
+      <div v-if="store.segmentationRemovedPeaks.length" class="marker-legend">
+        <span class="marker-dot removed-dot"></span>
+        <span class="marker-text">Removed by city-pipeline filters — {{ store.segmentationRemovedPeaks.length }}</span>
       </div>
       <div v-if="store.segmentationRejectedPeaks.length" class="marker-legend">
         <span class="marker-dot rejected-dot"></span>
@@ -483,6 +512,14 @@ const NN_PARAMS = [
   { key: 'min_points', name: 'Min pts / tree', unit: 'pts', min: 1, max: 300, step: 1,
     tip: 'Trees with fewer points are dropped (same as above).' },
 ]
+// City-pipeline filters (remembered between sessions; both off by default)
+const filters = reactive((() => {
+  try { return { rooftop: false, definition: false, ...JSON.parse(localStorage.getItem('labellingTool.filters') || '{}') } }
+  catch { return { rooftop: false, definition: false } }
+})())
+watch(filters, v => { try { localStorage.setItem('labellingTool.filters', JSON.stringify(v)) } catch { /* ignore */ } }, { deep: true })
+const filterParams = computed(() => ({ filter_rooftop: filters.rooftop, filter_definition: filters.definition }))
+
 const splitMethod = ref((() => { try { return localStorage.getItem('labellingTool.splitMethod') || 'watershed' } catch { return 'watershed' } })())
 watch(splitMethod, v => { try { localStorage.setItem('labellingTool.splitMethod', v) } catch { /* ignore */ } })
 const nnModel = computed(() => store.models.find(m => m.role === 'instance' || m.id === 'instance'))
@@ -511,7 +548,7 @@ function resetParams() { Object.assign(activeValues.value, activeDefaults.value)
 // ── Live update: re-run the segmentation shortly after a setting changes ──
 const liveSeg = ref(true)
 let liveTimer = null, rerun = false
-watch([params, nnParams, splitMethod], () => {
+watch([params, nnParams, splitMethod, filters], () => {
   if (!liveSeg.value || !store.semanticLabels) return
   clearTimeout(liveTimer)
   liveTimer = setTimeout(() => {
@@ -641,6 +678,7 @@ async function runInstanceSegmentation() {
   store.segmentationPeaks = []
   store.segmentationSeedPeaks = []
   store.segmentationRejectedPeaks = []
+  store.segmentationRemovedPeaks = []
   segStats.value = null
   try {
     const res = await predictInstances(
@@ -688,16 +726,17 @@ async function runSegmentation() {
   store.segmentationPeaks = []
   store.segmentationSeedPeaks = []
   store.segmentationRejectedPeaks = []
+  store.segmentationRemovedPeaks = []
   segStats.value = null
   try {
     const nn = splitMethod.value === 'nn'
     const res = nn
-      ? await segmentTreesNN(route.params.id, route.params.patchId, Array.from(store.semanticLabels), { ...nnParams })
+      ? await segmentTreesNN(route.params.id, route.params.patchId, Array.from(store.semanticLabels), { ...nnParams, ...filterParams.value })
       : await segmentTrees(
           route.params.id,
           route.params.patchId,
           Array.from(store.semanticLabels),
-          { ...params, ...(store.dtmGrid ? dtmWorldParams(store.dtmGrid) : {}) },
+          { ...params, ...filterParams.value, ...(store.dtmGrid ? dtmWorldParams(store.dtmGrid) : {}) },
         )
     const { labels, tree_count } = res.data
 
@@ -705,6 +744,7 @@ async function runSegmentation() {
     store.segmentationPeaks     = res.data.peaks
     store.segmentationSeedPeaks = res.data.seed_peaks ?? []
     store.segmentationRejectedPeaks = res.data.rejected_peaks ?? []
+    store.segmentationRemovedPeaks = res.data.removed_peaks ?? []
     segStats.value = res.data.stats ?? null
 
     const counts = {}
@@ -969,6 +1009,11 @@ h3 { color: #adf; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .seed-dot  { background: #ffcc00; box-shadow: 0 0 4px #ffcc00; }
 .valid-dot { background: #ff3030; box-shadow: 0 0 4px #ff4040; }
 .rejected-dot { background: #8a8a9a; box-shadow: 0 0 3px #8a8a9a; }
+.removed-dot { background: #ff40ff; box-shadow: 0 0 4px #ff40ff; }
+.filters-box { margin: 8px 0 6px; padding: 6px 8px; border: 1px solid rgba(255,255,255,.12); border-radius: 6px; }
+.filters-title { font-size: 11px; font-weight: 600; opacity: .75; margin-bottom: 3px; }
+.filter-row { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; padding: 1px 0; }
+.filters-stats { border-left: 2px solid #ff40ff; }
 
 /* ── Segmentation step summary ───────────────────────────────── */
 .seg-stats {

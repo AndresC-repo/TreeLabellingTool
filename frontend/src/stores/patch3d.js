@@ -56,6 +56,8 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const segmentationSeedPeaks = ref([])
   // [[x,y,z], ...] local maxima rejected by min peak height (grey dots)
   const segmentationRejectedPeaks = ref([])
+  // [[x,y,z], ...] tops of trees removed by the city-pipeline filters (magenta dots)
+  const segmentationRemovedPeaks = ref([])
 
   // Undo signal — set after a successful undo to trigger color rebuild in CanvasRenderer3D
   const undoResult = ref(null)   // { full_reload, indices, label_values } | null
@@ -134,6 +136,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     segmentationPeaks.value = []
     segmentationSeedPeaks.value = []
     segmentationRejectedPeaks.value = []
+    segmentationRemovedPeaks.value = []
     undoResult.value = null
     groundIndices.value = []
     dtmGrid.value = null
@@ -161,7 +164,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     predicting, segmenting, isWholePatch, hasPrediction, predictionLegend,
     inferenceLabels, semanticLabels, inferenceVersion, models,
     treeProbs, treeThreshold, defaultThreshold, dtmExclude, predictRequest, thresholdTick,
-    segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks,
+    segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks, segmentationRemovedPeaks,
     undoResult, groundIndices, dtmGrid, heightMode, originX, originY, unitCode, unitScale, unitSource, unitCrs, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
     xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive, clipHover,
