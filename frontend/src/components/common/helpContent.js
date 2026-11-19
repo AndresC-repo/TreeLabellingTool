@@ -128,6 +128,7 @@ export const HELP = {
           '<b>✎</b> (hover a file name) renames the file in <code>data/labels</code>.',
           'Set a <b>status</b> (labelled, needs fix, reviewed, excluded) and notes to keep track. Excluded patches don\'t count in the totals.',
           '<b>By</b> shows who labelled it.',
+          '<b>🗑</b> on a row, or tick rows and press <b>Delete files</b>, moves the files to <code>data/labels_deleted</code> (training no longer sees them). <b>Undo</b> puts them back; empty that folder yourself to free space.',
           '<b>Smallest</b> is the height of the shortest labelled tree (m above the ground under it). Use <b>Trees &lt; 2.5 m</b> in the filters to find patches with very small trees; hover the value to see every tree height. Heights are measured by <b>⟳ Rescan</b> and on every save.',
         ],
       },

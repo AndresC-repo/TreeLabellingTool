@@ -400,6 +400,93 @@ def rename_file(key: str, new_name: str) -> dict:
         return dict(p)
 
 
+# ── Deleting files ────────────────────────────────────────────────────────────
+# "Delete" moves the file out of the labels folder into labels_deleted/ (next to it, so
+# training on data/labels no longer sees it) and keeps its registry entry under
+# "deleted", so Undo can put both back. Empty labels_deleted/ yourself to free space.
+
+def deleted_dir() -> Path:
+    root, _ = dataset_root()
+    return root / "labels_deleted"
+
+
+def _free_name(folder: Path, name: str) -> str:
+    stem, suf = Path(name).stem, Path(name).suffix
+    cand, i = name, 1
+    while (folder / cand).exists():
+        cand = f"{stem}__{i}{suf}"; i += 1
+    return cand
+
+
+def delete_patches(keys: list[str]) -> dict:
+    """Move the files of these patches to labels_deleted/ and drop them from the list.
+    Patches without a saved file are just removed from the list."""
+    done, failed = [], []
+    with _lock:
+        data = _load()
+        trash = data.setdefault("deleted", {})
+        folder, bin_ = labels_dir(), deleted_dir()
+        for key in keys:
+            p = data["patches"].get(key)
+            if p is None:
+                failed.append({"key": key, "reason": "not in the list (press Rescan)"})
+                continue
+            fname, moved_as = p.get("file"), None
+            if fname and (folder / fname).exists():
+                try:
+                    bin_.mkdir(parents=True, exist_ok=True)
+                    moved_as = _free_name(bin_, fname)
+                    (folder / fname).rename(bin_ / moved_as)
+                except OSError as e:
+                    failed.append({"key": key, "reason": f"could not move {fname}: {e}"})
+                    continue
+            tid = moved_as or f"entry:{key}"
+            trash[tid] = {"entry": dict(p), "deleted_at": _now(), "file": fname, "trash_file": moved_as}
+            if p.get("session_id") and p.get("patch_id"):
+                # still loaded in the tool: keep the patch (it can be saved again), drop only the file
+                for k in ("file", "file_sig", "file_missing", "exported_at", "custom_name"):
+                    p.pop(k, None)
+                p["status"] = "in progress"
+            else:
+                del data["patches"][key]
+            done.append({"key": key, "file": fname, "trash_id": tid})
+        _save(data)
+    return {"deleted": done, "failed": failed, "folder": str(deleted_dir())}
+
+
+def restore_patches(trash_ids: list[str]) -> dict:
+    """Undo delete_patches: move the files back and restore their entries."""
+    done, failed = [], []
+    with _lock:
+        data = _load()
+        trash = data.setdefault("deleted", {})
+        folder, bin_ = labels_dir(), deleted_dir()
+        for tid in trash_ids:
+            t = trash.get(tid)
+            if t is None:
+                failed.append({"trash_id": tid, "reason": "nothing to restore"})
+                continue
+            entry, fname = dict(t["entry"]), t.get("file")
+            if t.get("trash_file"):
+                src = bin_ / t["trash_file"]
+                if not src.exists():
+                    failed.append({"trash_id": tid, "reason": f"{t['trash_file']} is no longer in labels_deleted"})
+                    continue
+                if (folder / fname).exists():
+                    failed.append({"trash_id": tid, "reason": f"{fname} exists again in the labels folder"})
+                    continue
+                src.rename(folder / fname)
+            key = entry.get("key")
+            if key in data["patches"]:
+                key = f"file:{fname}" if fname else key
+                entry["key"] = key
+            data["patches"][key] = entry
+            del trash[tid]
+            done.append({"key": key, "file": fname})
+        _save(data)
+    return {"restored": done, "failed": failed}
+
+
 def forget_patch(session_id: str, patch_id: str) -> None:
     """Patch deleted in the tool: drop it unless it was exported (the file still counts)."""
     with _lock:

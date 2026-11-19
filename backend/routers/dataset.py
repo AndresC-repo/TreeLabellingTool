@@ -28,6 +28,14 @@ class PatchUpdate(BaseModel):
     fields: dict
 
 
+class KeysRequest(BaseModel):
+    keys: list[str]
+
+
+class RestoreRequest(BaseModel):
+    trash_ids: list[str]
+
+
 @router.get("")
 def get_overview():
     return dreg.overview()
@@ -189,6 +197,18 @@ def rename_file(req: RenameRequest):
         raise HTTPException(409, f"{e} already exists in the labels folder.")
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/delete")
+def delete_files(req: KeysRequest):
+    """Move the files of these patches from the labels folder to labels_deleted/."""
+    return dreg.delete_patches(req.keys)
+
+
+@router.post("/restore")
+def restore_files(req: RestoreRequest):
+    """Undo /delete."""
+    return dreg.restore_patches(req.trash_ids)
 
 
 @router.get("/patches.csv")

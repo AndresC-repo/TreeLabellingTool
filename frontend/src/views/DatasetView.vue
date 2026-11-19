@@ -101,9 +101,22 @@
 
       <!-- Patches table -->
       <div v-if="tab === 'patches'" class="table-wrap">
+        <div v-if="undoInfo" class="bulk undo">
+          <span>🗑 {{ undoInfo.text }}</span>
+          <button :disabled="busyDelete" @click="undoDelete">↶ Undo</button>
+          <button class="ghost" @click="undoInfo = null" title="Hide (the files stay in labels_deleted)">✕</button>
+        </div>
+        <div v-else-if="pickedPatches.size" class="bulk">
+          <b>{{ pickedPatches.size }} patch{{ pickedPatches.size > 1 ? 'es' : '' }} selected</b>
+          <button class="danger" :disabled="busyDelete" @click="deletePatches([...pickedPatches])"
+                  title="Move the files to data/labels_deleted (Undo is possible)">🗑 Delete files</button>
+          <button class="ghost" @click="pickedPatches.clear()">Clear</button>
+        </div>
         <table>
           <thead>
             <tr>
+              <th class="pick"><input type="checkbox" :checked="allPatchesPicked" :indeterminate.prop="pickedPatches.size > 0 && !allPatchesPicked"
+                     @change="pickAllPatches($event.target.checked)" title="Select all shown patches" /></th>
               <th @click="sortBy('file')">File</th>
               <th @click="sortBy('region')">Region</th>
               <th title="Centre of the patch in WGS84 (lat, lon). Click to open the spot in OpenStreetMap">Centre</th>
@@ -123,6 +136,8 @@
                 :class="{ excluded: p.status === 'excluded', canopen: canOpen(p), busy: opening === p.key, 'last-opened': p.key === lastOpened }"
                 :title="canOpen(p) ? 'Double-click to open in the 3D view' : ''"
                 @dblclick="onRowDblClick($event, p)">
+              <td class="pick" @dblclick.stop><input type="checkbox" :checked="pickedPatches.has(p.key)"
+                     @change="$event.target.checked ? pickedPatches.add(p.key) : pickedPatches.delete(p.key)" /></td>
               <td class="file">
                 <div v-if="renaming === p.key" class="rename">
                   <input v-model="renameText" class="rename-input" @keydown.enter.prevent="commitRename(p)"
@@ -176,9 +191,11 @@
                         :title="p.openable ? 'Open this patch in the 3D view' : 'Load the saved file into the tool and open it in the 3D view'">
                   {{ opening === p.key ? 'Opening…' : 'Open' }}
                 </button>
+                <button class="del" :disabled="busyDelete" @click.stop="deletePatches([p.key])" @dblclick.stop
+                        :title="p.file ? `Delete ${p.file} (moved to data/labels_deleted, Undo possible)` : 'Remove from the list'">🗑</button>
               </td>
             </tr>
-            <tr v-if="!sortedPatches.length"><td colspan="12" class="empty">No patches match.</td></tr>
+            <tr v-if="!sortedPatches.length"><td colspan="13" class="empty">No patches match.</td></tr>
           </tbody>
         </table>
       </div>
@@ -244,7 +261,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getDataset, scanLabelsFolder, updateDatasetSource, updateDatasetSourcesBulk, locateDatasetSources,
+import { getDataset, scanLabelsFolder, deleteDatasetFiles, restoreDatasetFiles, updateDatasetSource, updateDatasetSourcesBulk, locateDatasetSources,
          updateDatasetPatch, datasetCsvUrl,
          openDatasetPatch, renameDatasetFile } from '../api/client.js'
 import { useToastStore } from '../stores/toast.js'
@@ -343,6 +360,47 @@ async function setSource(s, fields) {
 }
 
 // ── bulk state / city for source tiles ──
+// ── delete files (moved to data/labels_deleted, with Undo) ──
+const pickedPatches = reactive(new Set())
+const busyDelete = ref(false)
+const undoInfo = ref(null)        // { text, trashIds }
+const allPatchesPicked = computed(() => sortedPatches.value.length > 0 && sortedPatches.value.every(p => pickedPatches.has(p.key)))
+function pickAllPatches(on) { for (const p of sortedPatches.value) on ? pickedPatches.add(p.key) : pickedPatches.delete(p.key) }
+async function deletePatches(keys) {
+  if (!keys.length) return
+  busyDelete.value = true
+  try {
+    const r = await deleteDatasetFiles(keys)
+    const files = r.deleted.filter(d => d.file).length
+    const entries = r.deleted.length - files
+    if (r.deleted.length) {
+      undoInfo.value = {
+        trashIds: r.deleted.map(d => d.trash_id),
+        text: [files ? `${files} file${files > 1 ? 's' : ''} moved to data/labels_deleted` : '',
+               entries ? `${entries} unsaved entr${entries > 1 ? 'ies' : 'y'} removed` : ''].filter(Boolean).join(', '),
+      }
+    }
+    if (r.failed.length) toast.error('Not deleted: ' + r.failed.map(f => f.reason).join('; '))
+    for (const k of keys) pickedPatches.delete(k)
+    await load()
+  } catch (err) {
+    toast.error('Delete failed: ' + (err.response?.data?.detail || err.message))
+  } finally { busyDelete.value = false }
+}
+async function undoDelete() {
+  if (!undoInfo.value) return
+  busyDelete.value = true
+  try {
+    const r = await restoreDatasetFiles(undoInfo.value.trashIds)
+    if (r.restored.length) toast.success(`Restored ${r.restored.length} patch${r.restored.length > 1 ? 'es' : ''}`)
+    if (r.failed.length) toast.error('Not restored: ' + r.failed.map(f => f.reason).join('; '))
+    undoInfo.value = null
+    await load()
+  } catch (err) {
+    toast.error('Undo failed: ' + (err.response?.data?.detail || err.message))
+  } finally { busyDelete.value = false }
+}
+
 const picked = reactive(new Set())
 const bulk = reactive({ state: '', city: '' })
 const busy = ref(false)
@@ -648,6 +706,13 @@ input.mid { width: 120px; }
   background: #1b2442; border: 1px solid #3a4a7e; border-radius: 6px; font-size: 12.5px; color: #cdd8f5; }
 .bulk button { background: #2d4580; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .bulk button:disabled { opacity: 0.45; cursor: default; }
+.bulk button.danger { background: #8a2c2c; }
+.bulk button.danger:hover:not(:disabled) { background: #a83636; }
+.bulk.undo { background: #2a2418; border-color: #6a5a2a; color: #f0dfb0; }
+button.del { background: none; border: 1px solid transparent; color: #866; border-radius: 4px; padding: 2px 5px;
+  margin-left: 4px; cursor: pointer; font-size: 12px; opacity: 0.55; }
+tr:hover button.del { opacity: 1; }
+button.del:hover:not(:disabled) { color: #fff; background: #833; border-color: #a44; }
 .bulk button.ghost { background: none; color: #9ab; }
 .bulk .sep { color: #556; }
 th.pick, td.pick { width: 28px; padding-right: 0; }

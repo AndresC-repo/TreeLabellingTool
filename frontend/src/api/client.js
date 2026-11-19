@@ -86,6 +86,8 @@ export const locateDatasetSources = (names) => api.post('/dataset/sources/locate
 export const updateDatasetPatch = (key, fields) => api.patch('/dataset/patches', { key, fields })
 export const openDatasetPatch = (key) => api.post('/dataset/open', { key })
 export const renameDatasetFile = (key, newName) => api.post('/dataset/rename', { key, new_name: newName })
+export const deleteDatasetFiles = (keys) => api.post('/dataset/delete', { keys }).then(r => r.data)
+export const restoreDatasetFiles = (trashIds) => api.post('/dataset/restore', { trash_ids: trashIds }).then(r => r.data)
 export const datasetCsvUrl = '/api/v1/dataset/patches.csv'
 
 export const getDownloadUrl = (sessionId, patchId) =>
