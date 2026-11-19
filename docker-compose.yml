@@ -29,6 +29,7 @@ services:
       # _force_spconv_native() in predictor.py overrides this as well, but
       # setting it here ensures the right choice is made at model-creation time.
       - CUDA_VISIBLE_DEVICES=
+      - NAIP_SERVICE_URL=http://naip:8001
 
   frontend:
     build:
@@ -42,6 +43,16 @@ services:
     command: npm run dev
     depends_on:
       - backend
+
+  # Optional: NAIP aerial image + image-tree hints in the 3D view (TensorFlow, USA only).
+  # Only started with `make naip` (docker compose --profile naip up); see naip_service/README.md
+  naip:
+    build: ./naip_service
+    profiles: ["naip"]
+    volumes:
+      - ${NAIP_WEIGHTS_DIR:-./naip_service/weights}:/weights:ro
+    expose:
+      - "8001"
 
 volumes:
   storage_data:

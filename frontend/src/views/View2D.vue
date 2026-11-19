@@ -136,8 +136,9 @@
     <div v-else class="main-area">
       <ClassificationLegend v-if="store.scalarField === 'classification'" />
       <CanvasRenderer2D class="canvas-area" />
-      <aside v-if="store.labeledRegions.length > 0" class="side-panel">
-        <h3>Labeled Regions</h3>
+      <aside v-if="store.labeledRegions.length > 0 || naip.status.running" class="side-panel">
+        <NaipHintsPanel v-if="naip.status.running" scope="tile" class="naip-block" />
+        <h3 v-if="store.labeledRegions.length > 0">Labeled Regions</h3>
         <div
           v-for="region in store.labeledRegions"
           :key="region.patch_id"
@@ -195,8 +196,12 @@ import CanvasRenderer2D from '../components/view2d/CanvasRenderer2D.vue'
 import ScalarSelector from '../components/view2d/ScalarSelector.vue'
 import ClassificationLegend from '../components/view2d/ClassificationLegend.vue'
 import HelpButton from '../components/common/HelpButton.vue'
+import NaipHintsPanel from '../components/patch3d/NaipHintsPanel.vue'
+import { useNaipStore } from '../stores/naip.js'
 
 const route  = useRoute()
+const naip = useNaipStore()
+naip.checkStatus()   // shows the NAIP panel only when `make naip` is running
 const router = useRouter()
 const session = useSessionStore()
 const store  = useView2DStore()
@@ -617,6 +622,7 @@ button:disabled { opacity: 0.6; cursor: default; }
 .folder-load { padding-left: 10px; padding-right: 10px; }
 .danger-btn:hover:not(:disabled) { background: #7a3035; }
 .canvas-area { flex: 1; }
+.naip-block { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid #2a2a48; }
 .side-panel {
   width: 220px;
   background: #0d0d1f;

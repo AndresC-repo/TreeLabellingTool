@@ -9,6 +9,8 @@ from routers import patches
 from routers import view
 from routers import dataset
 from routers import models
+from routers import naip
+from routers import geo
 from services.sessions import purge_session, touch_session, session_id_from_path
 
 @asynccontextmanager
@@ -56,6 +58,8 @@ app.include_router(view.router)
 app.include_router(patches.router)
 app.include_router(dataset.router)
 app.include_router(models.router)
+app.include_router(naip.router)
+app.include_router(geo.router)
 
 @app.get("/api/v1/health")
 def health():

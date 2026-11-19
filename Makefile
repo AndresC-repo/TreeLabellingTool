@@ -1,4 +1,4 @@
-.PHONY: help dev dev-build prod prod-build down logs logs-backend logs-frontend clean
+.PHONY: help dev dev-build prod prod-build naip naip-build prod-naip down logs logs-backend logs-frontend clean
 
 # Default target
 .DEFAULT_GOAL := help
@@ -18,6 +18,11 @@ help:
 	@echo "Production:"
 	@echo "  prod          Start prod stack (nginx-served frontend, no --reload)"
 	@echo "  prod-build    Rebuild images before starting prod stack"
+	@echo ""
+	@echo "Optional NAIP hints (aerial image + image-tree hints, USA):"
+	@echo "  naip          Dev stack plus the NAIP service"
+	@echo "  naip-build    Same, rebuilding images"
+	@echo "  prod-naip     Prod stack plus the NAIP service"
 	@echo ""
 	@echo "Logs:"
 	@echo "  logs          Tail logs from all containers"
@@ -51,6 +56,19 @@ prod:
 prod-build:
 	docker compose -f docker-compose.prod.yml up --build
 
+# ─── Optional NAIP hints ─────────────────────────────────────────────────────
+
+# Same stacks plus the naip container (TensorFlow, separate from the backend).
+# Weights of the image tree model: NAIP_WEIGHTS_DIR in .env (see naip_service/README.md).
+naip:
+	docker compose --profile naip up
+
+naip-build:
+	docker compose --profile naip up --build
+
+prod-naip:
+	docker compose -f docker-compose.prod.yml --profile naip up --build
+
 # ─── Logs ────────────────────────────────────────────────────────────────────
 
 logs:
@@ -66,7 +84,7 @@ logs-frontend:
 
 # Stops containers but keeps the storage_data volume intact.
 down:
-	docker compose down
+	docker compose --profile naip down
 
 # Stops containers AND removes the storage_data volume.
 # WARNING: this deletes all uploaded .las files and session data.

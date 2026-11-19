@@ -88,8 +88,18 @@ export const HELP = {
         ],
       },
       {
+        heading: 'NAIP layers (optional, USA)',
+        steps: [
+          'Start the tool with <b>make naip</b>. The <b>🛰 NAIP</b> panel (here and in the 2D view) loads the aerial image for the patch or the whole file.',
+          'Click the layers on and off: <b>Labelled area</b> (cyan outline), <b>RGB</b> or <b>NDVI</b> image, <b>Ventura</b> trees found in the image (<span style="color:#ff46a2">pink</span>), <b>True labels</b> hand-placed by Ventura et al. (<span style="color:#46e0ff">cyan</span>).',
+          'True labels exist only inside the labelled area (small crops in 8 Californian cities). Tall crowns can sit 2–4 m off in the image.',
+          'Pick the <b>image year</b> closest to the lidar survey; the true labels of the nearest year are shown.',
+        ],
+      },
+      {
         heading: 'Keys',
         keys: [
+          ['P', 'Lat/lon of the hovered point (C copies it)'],
           ['R', 'Rotate ↔ lasso'],
           ['T / S', 'Top / side view'],
           ['V', 'Cycle colours (elevation, DTM, CHM)'],

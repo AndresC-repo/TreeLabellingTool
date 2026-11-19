@@ -1,6 +1,6 @@
 <template>
-  <div ref="container" class="canvas3d" :class="{ 'height-mode': store.heightMode }"
-       @mousemove="onHoverMove" @mouseleave="hoverInfo = null; clearHeightProbe()">
+  <div ref="container" class="canvas3d" :class="{ 'height-mode': store.heightMode || store.latlonMode }"
+       @mousemove="onHoverMove" @mouseleave="hoverInfo = null; clearHeightProbe(); latlonTip = null">
     <div v-if="loading" class="loading">Loading patch...</div>
     <LassoOverlay
       :drawing="lasso.drawing.value"
@@ -107,6 +107,10 @@
                 title="Hover a point to see its height above the ground below it, in metres [H]">
           📏 Height <kbd>H</kbd>
         </button>
+        <button :class="{ active: store.latlonMode }" @click="store.latlonMode = !store.latlonMode"
+                title="Hover a point to see its latitude / longitude (WGS84) [P]; C copies it">
+          🌐 Lat/lon <kbd>P</kbd>
+        </button>
       </div>
     </div>
     <!-- No ground points warning (DTM / CHM mode) -->
@@ -145,6 +149,12 @@
       </template>
       <template v-else>No ground points to measure from — label ground (class 2) first</template>
     </div>
+    <!-- Lat/lon probe (🌐) -->
+    <div v-if="latlonTip" class="height-tip" :style="{ left: latlonTip.x + 'px', top: latlonTip.y + 'px' }">
+      <template v-if="latlonTip.text"><b>{{ latlonTip.text }}</b>
+        <span class="sub">{{ latlonTip.copied ? 'copied ✓' : 'C = copy' }}</span></template>
+      <template v-else>{{ latlonTip.msg }}</template>
+    </div>
   </div>
 </template>
 
@@ -155,10 +165,11 @@ import { TrackballControls } from 'three/addons/controls/TrackballControls.js'
 import { useThreeScene } from '../../composables/useThreeScene.js'
 import { usePointCloud3D } from '../../composables/usePointCloud3D.js'
 import { usePatch3DStore } from '../../stores/patch3d.js'
+import { useNaipStore } from '../../stores/naip.js'
 import { useView2DStore } from '../../stores/view2d.js'
 import { useRoute } from 'vue-router'
 import { useLasso3D } from '../../composables/useLasso3D.js'
-import { labelPoints, getNextLabel, predictPatch, deletePoints, getModels } from '../../api/client.js'
+import { labelPoints, getNextLabel, predictPatch, deletePoints, getModels, getLonLatFit } from '../../api/client.js'
 import LassoOverlay from './LassoOverlay.vue'
 import ElevationFilter from './ElevationFilter.vue'
 
@@ -166,6 +177,7 @@ const container = ref(null)
 const axisCanvas = ref(null)
 const route = useRoute()
 const store = usePatch3DStore()
+const naip = useNaipStore()
 const view2d = useView2DStore()
 
 const { scene, camera, renderer, setOnFrame } = useThreeScene(container, 'perspective')
@@ -672,6 +684,69 @@ watch(() => store.segmentationRemovedPeaks, _rebuildPeaksMeshes)
 watch(() => [store.originX, store.originY], _rebuildPeaksMeshes)
 watch(() => store.viewMode, _rebuildPeaksMeshes)
 
+// ── NAIP layers (optional, NaipHintsPanel): image floor (RGB / NDVI), Ventura trees (pink),
+// true labels (cyan) and the labelled area (cyan outline). Positions from the backend are world
+// coordinates; the scene is in local x/y (see _buildPointsMesh).
+const NAIP_PINK = 0xff46a2
+const NAIP_CYAN = 0x46e0ff
+let naipObjects = []
+function _clearNaip() {
+  for (const o of naipObjects) {
+    scene.value?.remove(o)
+    o.geometry?.dispose()
+    if (o.material?.map) o.material.map.dispose()
+    o.material?.dispose()
+  }
+  naipObjects = []
+}
+// dot at the top of the lidar there, line down to the ground
+function _naipDots(points, color, size) {
+  if (!points.length) return
+  const ox = store.originX, oy = store.originY
+  const dots = _buildPointsMesh(points.map(t => [t.x, t.y, t.z]), color, size)
+  if (dots) { scene.value.add(dots); naipObjects.push(dots) }
+  const pos = new Float32Array(points.length * 6)
+  points.forEach((t, i) => pos.set([t.x - ox, t.y - oy, t.ground_z, t.x - ox, t.y - oy, t.z], i * 6))
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3))
+  const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+    color, transparent: true, opacity: 0.6, depthTest: false }))
+  scene.value.add(lines); naipObjects.push(lines)
+}
+function _buildNaip() {
+  _clearNaip()
+  const r = naip.patch
+  if (!r || !scene.value) return
+  const L = naip.layers
+  const ox = store.originX, oy = store.originY
+  const zFloor = Math.min(store.zBoundsMin, r.ground_z ?? store.zBoundsMin) - 0.05
+  if (L.rgb || L.ndvi) {
+    const [x0, y0, x1, y1] = r.bounds
+    const tex = new THREE.TextureLoader().load('data:image/png;base64,' + (L.ndvi ? r.ndvi_png : r.rgb_png))
+    tex.colorSpace = THREE.SRGBColorSpace
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(x1 - x0, y1 - y0),
+      new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, transparent: true, opacity: 0.95, depthWrite: false }))
+    plane.position.set((x0 + x1) / 2 - ox, (y0 + y1) / 2 - oy, zFloor)   // a floor just below the lowest point
+    plane.renderOrder = -1
+    scene.value.add(plane); naipObjects.push(plane)
+  }
+  const year = naip.labelYear(r)
+  if (L.area) {
+    for (const c of r.crops.filter(c => c.year === year)) {
+      const pts = c.ring.map(([x, y]) => new THREE.Vector3(x - ox, y - oy, zFloor + 0.02))
+      const loop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: NAIP_CYAN, depthTest: false }))
+      loop.renderOrder = 15
+      scene.value.add(loop); naipObjects.push(loop)
+    }
+  }
+  if (L.ventura && r.model) _naipDots(r.ventura, NAIP_PINK, 9)
+  if (L.truth) _naipDots(r.truth.filter(t => t.year === year), NAIP_CYAN, 11)
+}
+watch(() => [naip.patch, naip.layers.area, naip.layers.rgb, naip.layers.ndvi, naip.layers.ventura,
+             naip.layers.truth, store.originX, store.originY, store.zBoundsMin], _buildNaip)
+
 onMounted(async () => {
   loadModels()
   document.addEventListener('click', onClickOutsideInference, true)
@@ -735,6 +810,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  _clearNaip()
   document.removeEventListener('click', onClickOutsideInference, true)
   controls?.dispose()
   if (peaksMesh)     { peaksMesh.geometry.dispose();     peaksMesh.material.dispose() }
@@ -855,7 +931,65 @@ watch(() => store.heightMode, on => {
   refreshGround(); store.dtmGrid = getDTMGrid()
 })
 
+// ── Lat/lon probe (🌐): WGS84 position of the hovered point ──
+// The backend fits lon/lat = f(x, y) for this patch once (routers/geo.py); evaluated here per hover.
+const latlonTip = ref(null)
+let lonlatFit = null        // response of /geo/.../lonlat-fit
+let lastLatLon = null       // [lat, lon] of the hovered point, for C = copy
+let _fitLoading = false
+async function loadLonLatFit() {
+  if (lonlatFit || _fitLoading) return
+  _fitLoading = true
+  try { lonlatFit = (await getLonLatFit(route.params.id, route.params.patchId)).data }
+  catch { lonlatFit = { available: false, reason: 'Lat/lon not available (backend error).' } }
+  finally { _fitLoading = false }
+}
+function toLatLon(xLocal, yLocal) {
+  const f = lonlatFit
+  const u = (xLocal + store.originX - f.cx) / f.scale, v = (yLocal + store.originY - f.cy) / f.scale
+  const t = [1, u, v, u * u, u * v, v * v]
+  const dot = c => c.reduce((s, ci, k) => s + ci * t[k], 0)
+  return [dot(f.lat), dot(f.lon)]
+}
+function probeLatLon(e) {
+  const mesh = getPointsMesh()
+  if (!lonlatFit) { loadLonLatFit(); return }   // e.g. probe still on from the previous patch
+  if (!mesh || !camera.value || !renderer.value) { latlonTip.value = null; return }
+  if (_probeThrottle) return
+  _probeThrottle = requestAnimationFrame(() => { _probeThrottle = null })
+  const cRect = container.value.getBoundingClientRect()
+  const at = { x: e.clientX - cRect.left + 16, y: e.clientY - cRect.top + 16 }
+  if (!lonlatFit.available) { latlonTip.value = { ...at, msg: lonlatFit.reason || 'No coordinate system in the file.' }; return }
+  const rect = renderer.value.domElement.getBoundingClientRect()
+  _hoverRaycaster.setFromCamera(
+    { x: ((e.clientX - rect.left) / rect.width) * 2 - 1, y: -((e.clientY - rect.top) / rect.height) * 2 + 1 },
+    camera.value)
+  const camDist = camera.value.position.distanceTo(controls?.target ?? camera.value.position)
+  _hoverRaycaster.params.Points = { threshold: camDist * 0.003 }
+  const pos = getPositions()
+  const hit = _hoverRaycaster.intersectObject(mesh).find(h =>
+    pointVisible(pos[h.index * 3], pos[h.index * 3 + 1], pos[h.index * 3 + 2]))
+  if (!hit) { latlonTip.value = null; if (probe) probe.visible = false; lastLatLon = null; return }
+  const i = hit.index
+  const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2]
+  lastLatLon = toLatLon(x, y)
+  latlonTip.value = { ...at, text: `${lastLatLon[0].toFixed(6)}, ${lastLatLon[1].toFixed(6)}`, copied: false }
+  showProbe(x, y, z, null)
+}
+async function copyLatLon() {
+  if (!store.latlonMode || !lastLatLon) return
+  const txt = `${lastLatLon[0].toFixed(6)}, ${lastLatLon[1].toFixed(6)}`
+  try { await navigator.clipboard.writeText(txt) } catch { /* not allowed (http) */ }
+  if (latlonTip.value) latlonTip.value = { ...latlonTip.value, copied: true }
+}
+// one probe at a time
+watch(() => store.latlonMode, on => {
+  if (on) { store.heightMode = false; loadLonLatFit() } else { latlonTip.value = null; clearHeightProbe() }
+})
+watch(() => store.heightMode, on => { if (on) store.latlonMode = false })
+
 function onHoverMove(e) {
+  if (store.latlonMode) { hoverInfo.value = null; probeLatLon(e); return }
   if (store.heightMode) { hoverInfo.value = null; probeHeight(e); return }
   const mode = store.viewMode
   const isInference     = mode === 'prediction' || mode === 'inference-chm'
@@ -929,7 +1063,7 @@ async function reloadPatch() {
   store.dtmGrid = getDTMGrid()
 }
 
-defineExpose({ highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction, deleteClippedPoints, getClippedOutIndices })
+defineExpose({ copyLatLon, highlightIndices, applyLabelColor, applyLabelsBulkColors, applyPredictionColors, resetColors, getPositions, camera, renderer, setRotate, toggleRotate, setTopView, setSideView, runPrediction, deleteClippedPoints, getClippedOutIndices })
 </script>
 
 <style scoped>

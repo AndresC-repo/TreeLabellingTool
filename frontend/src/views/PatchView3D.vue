@@ -30,6 +30,7 @@
           @clip-change="onClipChange"
           @delete-clipped="onDeleteClipped"
         />
+        <NaipHintsPanel scope="patch" />
         <SavePanel ref="savePanel" />
       </aside>
     </div>
@@ -46,6 +47,7 @@ import PatchLegend from '../components/patch3d/PatchLegend.vue'
 import InferenceLegend from '../components/patch3d/InferenceLegend.vue'
 import SavePanel from '../components/patch3d/SavePanel.vue'
 import ClipPanel from '../components/patch3d/ClipPanel.vue'
+import NaipHintsPanel from '../components/patch3d/NaipHintsPanel.vue'
 import HelpButton from '../components/common/HelpButton.vue'
 
 const route = useRoute()
@@ -129,6 +131,14 @@ function onKeyDown(e) {
     case 'h':
     case 'H':
       store.heightMode = !store.heightMode
+      break
+    case 'p':
+    case 'P':
+      store.latlonMode = !store.latlonMode
+      break
+    case 'c':
+    case 'C':
+      renderer3d.value?.copyLatLon()
       break
     case 'i':
     case 'I':

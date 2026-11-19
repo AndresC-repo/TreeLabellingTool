@@ -85,6 +85,7 @@ import { useToastStore } from '../../stores/toast.js'
 import { ref, shallowRef, reactive, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useView2DStore } from '../../stores/view2d.js'
+import { useNaipStore } from '../../stores/naip.js'
 import { useSelectionRect } from '../../composables/useSelectionRect.js'
 import { useSelectionFreehand } from '../../composables/useSelectionFreehand.js'
 import { useFixedRect } from '../../composables/useFixedRect.js'
@@ -93,6 +94,7 @@ import { get2DImage, extractPatch } from '../../api/client.js'
 const route = useRoute()
 const sessionId = route.params.id
 const store = useView2DStore()
+const naip = useNaipStore()
 
 const containerRef = ref(null)
 const canvasRef = ref(null)
@@ -162,6 +164,83 @@ function draw() {
     ctx.drawImage(d.img, tl.x, tl.y, br.x - tl.x, br.y - tl.y)
   }
   drawHatches(ctx)
+  drawNaip(ctx)
+}
+
+// ── NAIP layers (optional, NaipHintsPanel scope="tile") ──────────────────────
+// Image (RGB / NDVI) over the points, labelled area (cyan outline), Ventura trees (pink dots),
+// true labels (cyan rings). All positions are in the file's coordinates, like the points.
+const naipImgs = { rgb: null, ndvi: null }
+function _naipImage(png) {
+  const img = new Image()
+  img.onload = () => draw()
+  img.src = 'data:image/png;base64,' + png
+  return img
+}
+watch(() => naip.tile, r => {
+  naipImgs.rgb = r ? _naipImage(r.rgb_png) : null
+  naipImgs.ndvi = r ? _naipImage(r.ndvi_png) : null
+  draw()
+})
+watch(() => [naip.layers.area, naip.layers.rgb, naip.layers.ndvi, naip.layers.ventura, naip.layers.truth], () => draw())
+
+function drawNaip(ctx) {
+  const r = naip.tile
+  if (!r) return
+  const L = naip.layers
+  const img = L.rgb ? naipImgs.rgb : (L.ndvi ? naipImgs.ndvi : null)
+  if (img?.complete && img.naturalWidth) {
+    const [x0, y0, x1, y1] = r.bounds
+    const tl = worldToCanvas(x0, y1), br = worldToCanvas(x1, y0)
+    ctx.save()
+    ctx.globalAlpha = 0.92
+    ctx.imageSmoothingEnabled = true
+    ctx.drawImage(img, tl.x, tl.y, br.x - tl.x, br.y - tl.y)
+    ctx.restore()
+  }
+  const year = naip.labelYear(r)
+  if (L.area) {
+    ctx.save()
+    ctx.setLineDash([6, 4])
+    ctx.strokeStyle = '#46e0ff'
+    ctx.fillStyle = 'rgba(70,224,255,0.08)'
+    ctx.lineWidth = 1.5
+    for (const c of r.crops.filter(c => c.year === year)) {
+      const pts = c.ring.map(([x, y]) => worldToCanvas(x, y))
+      ctx.beginPath()
+      ctx.moveTo(pts[0].x, pts[0].y)
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+  // dot size grows when zooming in (about 1 m across), 2–6 px
+  const ppu = Math.abs(worldToCanvas(1, 0).x - worldToCanvas(0, 0).x)
+  const rad = Math.max(2, Math.min(6, ppu * 0.8))
+  if (L.ventura && r.model) {
+    ctx.fillStyle = '#ff46a2'
+    ctx.beginPath()
+    for (const t of r.ventura) {
+      const p = worldToCanvas(t.x, t.y)
+      ctx.moveTo(p.x + rad, p.y)
+      ctx.arc(p.x, p.y, rad, 0, 2 * Math.PI)
+    }
+    ctx.fill()
+  }
+  if (L.truth) {
+    ctx.strokeStyle = '#46e0ff'
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for (const t of r.truth) {
+      if (t.year !== year) continue
+      const p = worldToCanvas(t.x, t.y)
+      ctx.moveTo(p.x + rad + 1.5, p.y)
+      ctx.arc(p.x, p.y, rad + 1.5, 0, 2 * Math.PI)
+    }
+    ctx.stroke()
+  }
 }
 
 function drawHatches(ctx) {

@@ -172,3 +172,14 @@ export const splitFile = (file, nTiles, onProgress, load = false) => {
     onUploadProgress: e => onProgress && onProgress(Math.round((e.loaded * 100) / e.total)),
   })
 }
+
+// NAIP layers (optional naip container, `make naip`): aerial image, Ventura trees, true labels.
+export const getNaipStatus = () => api.get('/naip/status')
+// whole loaded file (2D view) — runs the image model over the whole file, can take a while
+export const getNaipTile = (sessionId, { year = null } = {}) => api.post(`/naip/${sessionId}/tile`, { year })
+// one patch (3D view)
+export const getNaipPatch = (sessionId, patchId, { year = null } = {}) =>
+  api.post(`/naip/${sessionId}/${patchId}/patch`, { year })
+
+// Quadratic fit file coordinates -> lon/lat for the 🌐 hover probe (see backend/routers/geo.py)
+export const getLonLatFit = (sessionId, patchId) => api.get(`/geo/${sessionId}/${patchId}/lonlat-fit`)

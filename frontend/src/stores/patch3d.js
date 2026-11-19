@@ -78,6 +78,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
   const unitCrs    = ref(null)        // units of the file's coordinate system (null = none)
   const dtmGrid = ref(null)  // { grid: float[], rows, cols, xMin, yMin, xRange, yRange }
   const heightMode = ref(false)  // hover a point → its height above the ground (📏, key H)
+  const latlonMode = ref(false)  // hover a point → its latitude / longitude (🌐, key P)
 
   // Z bounds of the loaded patch — for elevation filter slider
   const zBoundsMin = ref(0)
@@ -165,7 +166,7 @@ export const usePatch3DStore = defineStore('patch3d', () => {
     inferenceLabels, semanticLabels, inferenceVersion, models,
     treeProbs, treeThreshold, defaultThreshold, dtmExclude, predictRequest, thresholdTick,
     segmentationPeaks, segmentationSeedPeaks, segmentationRejectedPeaks, segmentationRemovedPeaks,
-    undoResult, groundIndices, dtmGrid, heightMode, originX, originY, unitCode, unitScale, unitSource, unitCrs, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
+    undoResult, groundIndices, dtmGrid, heightMode, latlonMode, originX, originY, unitCode, unitScale, unitSource, unitCrs, zBoundsMin, zBoundsMax, elevFilterMin, elevFilterMax,
     xBoundsMin, xBoundsMax, yBoundsMin, yBoundsMax,
     xClipMin, xClipMax, yClipMin, yClipMax, zClipMin, zClipMax, clipActive, clipHover,
     addAppliedLabel, reset,

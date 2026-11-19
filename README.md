@@ -75,6 +75,7 @@ labelled; `data/labelling_registry.json` holds that list. Send the `data` folder
 - **NN inference** — SegmentAnyTree models (tree / non-tree), downloaded from Hugging Face
 - **Tree instance segmentation** — CHM watershed (min height, min peak height)
 - **Save** — writes `<City>_<tile>_p<n>_<labeller>_t<trees>.las` straight into the training labels folder; real ASPRS classes + exact labels in a `label` field + units marker
+- **NAIP layers (optional, USA)** — in the 2D and 3D view: aerial image (RGB / NDVI), trees found by the Ventura et al. image model, their hand-placed true labels and the labelled area (California), each on/off with a click; `make naip`, see `naip_service/README.md`
 - **Dataset overview** — all patches and source tiles with tree counts, regions, status and notes; double-click to reopen a patch, rename files, CSV export
 
 ---
@@ -94,6 +95,7 @@ docker compose up --build        # or: make dev-build
 |---|---|
 | `make dev` / `make dev-build` | Dev stack (hot reload), optionally rebuilding images |
 | `make prod` / `make prod-build` | Labelling stack on http://localhost:8080 |
+| `make naip` / `make prod-naip` | Same, plus the optional NAIP service (first start builds a TensorFlow image, a few minutes) |
 | `make logs`, `make logs-backend`, `make logs-frontend` | Tail logs |
 | `make down` | Stop containers (uploaded files are kept) |
 | `make clean` | Stop containers and delete uploaded files and cached models |
@@ -110,6 +112,7 @@ docker compose up --build        # or: make dev-build
 | `HF_TOKEN` | *(empty)* | Hugging Face token, only if the model repository is private |
 | `MAX_UPLOAD_BYTES` | `2147483648` | Upload limit (2 GB) |
 | `DEFAULT_MAX_POINTS` | `500000` | Points drawn in the 2D view |
+| `NAIP_WEIGHTS_DIR` | `./naip_service/weights` | Folder containing `pretrained_rgbn` (image tree model) for the NAIP layers |
 
 Uploaded files and patches live in a Docker volume (`storage_data`) and are removed after 24 h without use.
 Downloaded models are cached in the `hf_cache` volume.

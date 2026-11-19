@@ -3,7 +3,7 @@
 
 # Labelled data in the default data folder (DATASET_DIR_HOST=./data)
 /data/
-
+ca_test_tiles/*
 # Runtime files
 backend/storage/*
 !backend/storage/.gitkeep
@@ -19,3 +19,9 @@ Thumbs.db
 # Large local files
 *.pdf
 Screenshot_inference.png
+.env.example
+# Optional NAIP service: model weights stay local
+naip_service/weights/*
+!naip_service/weights/.gitkeep
+ca_test_tiles/bench_socal2018/tiles/00133.laz
+ca_test_tiles.tgz

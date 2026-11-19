@@ -21,6 +21,7 @@ services:
       - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-2147483648}
       - DEFAULT_MAX_POINTS=${DEFAULT_MAX_POINTS:-500000}
       - CUDA_VISIBLE_DEVICES=
+      - NAIP_SERVICE_URL=http://naip:8001
 
   frontend:
     build: ./frontend
@@ -28,6 +29,18 @@ services:
       - "${PORT:-8080}:80"
     depends_on:
       - backend
+    restart: unless-stopped
+
+
+  # Optional: NAIP aerial image + image-tree hints in the 3D view (TensorFlow, USA only).
+  # Only started with `make naip` (docker compose --profile naip up); see naip_service/README.md
+  naip:
+    build: ./naip_service
+    profiles: ["naip"]
+    volumes:
+      - ${NAIP_WEIGHTS_DIR:-./naip_service/weights}:/weights:ro
+    expose:
+      - "8001"
     restart: unless-stopped
 
 volumes:
